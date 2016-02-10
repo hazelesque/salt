@@ -92,7 +92,7 @@ Use the following mysql database schema:
     CREATE TABLE `salt_events` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `tag` varchar(255) NOT NULL,
-    `data` varchar(1024) NOT NULL,
+    `data` mediumtext NOT NULL,
     `alter_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `master_id` varchar(255) NOT NULL,
     PRIMARY KEY (`id`),
@@ -114,6 +114,15 @@ To use the alternative configuration, append '--return_config alternative' to th
 .. code-block:: bash
 
     salt '*' test.ping --return mysql --return_config alternative
+
+To override individual configuration items, append --return_kwargs '{"key:": "value"}' to the salt command.
+
+.. versionadded:: Boron
+
+.. code-block:: bash
+
+    salt '*' test.ping --return mysql --return_kwargs '{"db": "another-salt"}'
+
 '''
 from __future__ import absolute_import
 # Let's not allow PyLint complain about string substitution
@@ -359,14 +368,40 @@ def get_jids():
     '''
     with _get_serv(ret=None, commit=True) as cur:
 
-        sql = '''SELECT DISTINCT jid
+        sql = '''SELECT DISTINCT `jid`, `load`
                 FROM `jids`'''
 
         cur.execute(sql)
         data = cur.fetchall()
+        ret = {}
+        for jid in data:
+            ret[jid[0]] = salt.utils.jid.format_jid_instance(jid[0],
+                                                             json.loads(jid[1]))
+        return ret
+
+
+def get_jids_filter(count, filter_find_job=True):
+    '''
+    Return a list of all job ids
+    :param int count: show not more than the count of most recent jobs
+    :param bool filter_find_jobs: filter out 'saltutil.find_job' jobs
+    '''
+    with _get_serv(ret=None, commit=True) as cur:
+
+        sql = '''SELECT * FROM (
+                     SELECT DISTINCT `jid` ,`load` FROM `jids`
+                     {0}
+                     ORDER BY `jid` DESC limit {1}
+                     ) `tmp`
+                 ORDER BY `jid`;'''
+        where = '''WHERE `load` NOT LIKE '%"fun": "saltutil.find_job"%' '''
+
+        cur.execute(sql.format(where if filter_find_job else '', count))
+        data = cur.fetchall()
         ret = []
         for jid in data:
-            ret.append(jid[0])
+            ret.append(salt.utils.jid.format_jid_instance_ext(jid[0],
+                                                              json.loads(jid[1])))
         return ret
 
 

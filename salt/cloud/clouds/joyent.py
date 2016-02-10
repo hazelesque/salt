@@ -11,7 +11,7 @@ Set up the cloud configuration at ``/etc/salt/cloud.providers`` or
 .. code-block:: yaml
 
     my-joyent-config:
-      provider: joyent
+      driver: joyent
       # The Joyent login user
       user: fred
       # The Joyent user's password
@@ -64,31 +64,25 @@ from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import PKCS1_v1_5
 
-# Import generic libcloud functions
-from salt.cloud.libcloudfuncs import *  # pylint: disable=redefined-builtin,wildcard-import,unused-wildcard-import
-
 # Import salt libs
 import salt.ext.six as six
+from salt.ext.six.moves import http_client  # pylint: disable=import-error,no-name-in-module
 import salt.utils.http
 import salt.utils.cloud
 import salt.config as config
-from salt.utils import namespaced_function
 from salt.utils.cloud import is_public_ip
+from salt.cloud.libcloudfuncs import node_state
 from salt.exceptions import (
     SaltCloudSystemExit,
     SaltCloudExecutionFailure,
-    SaltCloudExecutionTimeout
+    SaltCloudExecutionTimeout,
+    SaltCloudNotFound,
 )
-
-# Import 3rd-party libs
-import salt.ext.six as six
-from salt.ext.six.moves import http_client  # pylint: disable=import-error,no-name-in-module
 
 # Get logging started
 log = logging.getLogger(__name__)
 
-# namespace libcloudfuncs
-get_salt_interface = namespaced_function(get_salt_interface, globals())
+__virtualname__ = 'joyent'
 
 JOYENT_API_HOST_SUFFIX = '.api.joyentcloud.com'
 JOYENT_API_VERSION = '~7.2'
@@ -113,19 +107,18 @@ VALID_RESPONSE_CODES = [
     http_client.NO_CONTENT
 ]
 
+DEFAULT_NETWORKS = ['Joyent-SDC-Public']
 
-# Only load in this module is the JOYENT configurations are in place
+
+# Only load in this module if the Joyent configurations are in place
 def __virtual__():
     '''
-    Set up the libcloud functions and check for JOYENT configs
+    Check for Joyent configs
     '''
     if get_configured_provider() is False:
         return False
 
-    global script
-    conn = None
-    script = namespaced_function(script, globals(), (conn,))
-    return True
+    return __virtualname__
 
 
 def get_configured_provider():
@@ -134,7 +127,7 @@ def get_configured_provider():
     '''
     return config.is_provider_configured(
         __opts__,
-        __active_provider_name__ or 'joyent',
+        __active_provider_name__ or __virtualname__,
         ('user', 'password')
     )
 
@@ -152,7 +145,7 @@ def get_image(vm_):
         return images[vm_image]
 
     raise SaltCloudNotFound(
-        'The specified image, {0!r}, could not be found.'.format(vm_image)
+        'The specified image, \'{0}\', could not be found.'.format(vm_image)
     )
 
 
@@ -169,7 +162,7 @@ def get_size(vm_):
         return sizes[vm_size]
 
     raise SaltCloudNotFound(
-        'The specified size, {0!r}, could not be found.'.format(vm_size)
+        'The specified size, \'{0}\', could not be found.'.format(vm_size)
     )
 
 
@@ -205,7 +198,7 @@ def query_instance(vm_=None, call=None):
 
         if isinstance(data, dict) and 'error' in data:
             log.warn(
-                'There was an error in the query. {0}'.format(data['error'])
+                'There was an error in the query {0}'.format(data['error'])  # pylint: disable=E1126
             )
             # Trigger a failure in the wait for IP function
             return False
@@ -249,6 +242,20 @@ def create(vm_):
 
         salt-cloud -p profile_name vm_name
     '''
+    try:
+        # Check for required profile parameters before sending any API calls.
+        if vm_['profile'] and config.is_profile_configured(__opts__,
+                                                           __active_provider_name__ or 'joyent',
+                                                           vm_['profile']) is False:
+            return False
+    except AttributeError:
+        pass
+
+    # Since using "provider: <provider-engine>" is deprecated, alias provider
+    # to use driver: "driver: <provider-engine>"
+    if 'provider' in vm_:
+        vm_['driver'] = vm_.pop('provider')
+
     key_filename = config.get_cloud_config_value(
         'private_key', vm_, __opts__, search_global=False, default=None
     )
@@ -260,7 +267,7 @@ def create(vm_):
         {
             'name': vm_['name'],
             'profile': vm_['profile'],
-            'provider': vm_['provider'],
+            'provider': vm_['driver'],
         },
         transport=__opts__['transport']
     )
@@ -276,6 +283,7 @@ def create(vm_):
     salt.utils.cloud.check_name(vm_['name'], 'a-zA-Z0-9-.')
     kwargs = {
         'name': vm_['name'],
+        'networks': vm_.get('networks', DEFAULT_NETWORKS),
         'image': get_image(vm_),
         'size': get_size(vm_),
         'location': vm_.get('location', DEFAULT_LOCATION)
@@ -319,7 +327,7 @@ def create(vm_):
         {
             'name': vm_['name'],
             'profile': vm_['profile'],
-            'provider': vm_['provider'],
+            'provider': vm_['driver'],
         },
         transport=__opts__['transport']
     )
@@ -335,11 +343,13 @@ def create_node(**kwargs):
     size = kwargs['size']
     image = kwargs['image']
     location = kwargs['location']
+    networks = kwargs['networks']
 
     data = json.dumps({
         'name': name,
         'package': size['name'],
-        'image': image['name']
+        'image': image['name'],
+        'networks': networks
     })
 
     try:
@@ -578,7 +588,7 @@ def has_method(obj, method_name):
         return True
 
     log.error(
-        'Method {0!r} not yet supported!'.format(
+        'Method \'{0}\' not yet supported!'.format(
             method_name
         )
     )
@@ -643,7 +653,7 @@ def joyent_node_state(id_):
     values for consistency
 
     :param id_: joyent state value
-    :return: libcloudfuncs state value
+    :return: state value
     '''
     states = {'running': 0,
               'stopped': 2,
@@ -686,10 +696,14 @@ def reformat_node(item=None, full=False):
             item[key] = None
 
     # remove all the extra key value pairs to provide a brief listing
+    to_del = []
     if not full:
         for key in six.iterkeys(item):  # iterate over a copy of the keys
             if key not in desired_keys:
-                del item[key]
+                to_del.append(key)
+
+    for key in to_del:
+        del item[key]
 
     if 'state' in item:
         item['state'] = joyent_node_state(item['state'])
@@ -1029,7 +1043,7 @@ def query(action=None,
     if command:
         path += '/{0}'.format(command)
 
-    log.debug('User: {0!r} on PATH: {1}'.format(user, path))
+    log.debug('User: \'{0}\' on PATH: {1}'.format(user, path))
 
     timenow = datetime.datetime.utcnow()
     timestamp = timenow.strftime('%a, %d %b %Y %H:%M:%S %Z').strip()
@@ -1070,7 +1084,7 @@ def query(action=None,
         text=True,
         status=True,
         headers=True,
-        verify=verify_ssl,
+        verify_ssl=verify_ssl,
         opts=__opts__,
     )
     log.debug(

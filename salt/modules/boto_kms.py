@@ -2,7 +2,7 @@
 '''
 Connection module for Amazon KMS
 
-.. versionadded:: beryllium
+.. versionadded:: 2015.8.0
 
 :configuration: This module accepts explicit kms credentials but can also utilize
     IAM roles assigned to the instance trough Instance Profiles. Dynamic
@@ -40,7 +40,7 @@ from __future__ import absolute_import
 
 # Import Python libs
 import logging
-from salt.utils.serializers import json
+from salt.serializers import json
 from distutils.version import LooseVersion as _LooseVersion  # pylint: disable=import-error,no-name-in-module
 
 # Import Salt libs
@@ -73,7 +73,7 @@ def __virtual__():
     Only load if boto libraries exist.
     '''
     if not HAS_BOTO:
-        return False
+        return (False, 'The boto_kms module could not be loaded: boto libraries not found')
     return True
 
 

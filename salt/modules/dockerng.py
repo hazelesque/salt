@@ -2,11 +2,11 @@
 '''
 Management of Docker Containers
 
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 
-Why Make a Second Docker Module?
---------------------------------
+Why Make a Second Docker Execution Module?
+------------------------------------------
 
 We have received a lot of feedback on our Docker support. In the process of
 implementing recommended improvements, it became obvious that major changes
@@ -19,23 +19,22 @@ option. This will give users a couple release cycles to modify their scripts,
 SLS files, etc. to use the new functionality, rather than forcing users to
 change everything immediately.
 
-In the **Carbon** release of Salt (slated for late summer/early fall 2015),
-this execution module will take the place of the default Docker execution
-module, and backwards-compatible naming will be maintained for a couple
-releases after that to allow users time to replace references to ``dockerng``
-with ``docker``.
+In the **Carbon** release of Salt (due in 2016), this execution module will
+take the place of the default Docker execution module, and backwards-compatible
+naming will be maintained for a couple releases after that to allow users time
+to replace references to ``dockerng`` with ``docker``.
 
 
 Installation Prerequisites
 --------------------------
 
-This execution module requires at least version 1.0.0 of both docker-py_ and
+This execution module requires at least version 1.4.0 of both docker-py_ and
 Docker_. docker-py can easily be installed using :py:func:`pip.install
 <salt.modules.pip.install>`:
 
 .. code-block:: bash
 
-    salt myminion pip.install docker-py
+    salt myminion pip.install docker-py>=1.4.0
 
 .. _docker-py: https://pypi.python.org/pypi/docker-py
 .. _Docker: https://www.docker.com/
@@ -103,6 +102,20 @@ The second way is to use separate pillar variables ending in
 Both methods can be combined; any registry configured under
 ``docker-registries`` or ``*-docker-registries`` will be detected.
 
+Configuration Options
+---------------------
+
+The following options can be set in the :ref:`minion config
+<configuration-salt-minion>`:
+
+- ``docker.url``: URL to the docker service (default: local socket).
+- ``docker.version``: API version to use (default: currently 1.4 API).
+- ``docker.exec_driver``: Execution driver to use, one of the following:
+    - nsenter
+    - lxc-attach
+    - docker-exec
+
+    See :ref:`Executing Commands Within a Running Container <docker-execution-driver>`.
 
 Functions
 ---------
@@ -124,7 +137,7 @@ Functions
     - :py:func:`dockerng.logs <salt.modules.dockerng.logs>`
     - :py:func:`dockerng.pid <salt.modules.dockerng.pid>`
     - :py:func:`dockerng.port <salt.modules.dockerng.port>`
-    - :py:func:`dockerng.ps <salt.modules.dockerng.ps_>`
+    - :py:func:`dockerng.ps <salt.modules.dockerng.ps>`
     - :py:func:`dockerng.state <salt.modules.dockerng.state>`
     - :py:func:`dockerng.search <salt.modules.dockerng.search>`
     - :py:func:`dockerng.top <salt.modules.dockerng.top>`
@@ -134,7 +147,7 @@ Functions
     - :py:func:`dockerng.copy_from <salt.modules.dockerng.copy_from>`
     - :py:func:`dockerng.copy_to <salt.modules.dockerng.copy_to>`
     - :py:func:`dockerng.export <salt.modules.dockerng.export>`
-    - :py:func:`dockerng.rm <salt.modules.dockerng.rm_>`
+    - :py:func:`dockerng.rm <salt.modules.dockerng.rm>`
 - Management of Container State
     - :py:func:`dockerng.kill <salt.modules.dockerng.kill>`
     - :py:func:`dockerng.pause <salt.modules.dockerng.pause>`
@@ -147,13 +160,25 @@ Functions
     - :py:func:`dockerng.build <salt.modules.dockerng.build>`
     - :py:func:`dockerng.commit <salt.modules.dockerng.commit>`
     - :py:func:`dockerng.dangling <salt.modules.dockerng.dangling>`
-    - :py:func:`dockerng.import <salt.modules.dockerng.import_>`
+    - :py:func:`dockerng.import <salt.modules.dockerng.import>`
     - :py:func:`dockerng.load <salt.modules.dockerng.load>`
     - :py:func:`dockerng.pull <salt.modules.dockerng.pull>`
     - :py:func:`dockerng.push <salt.modules.dockerng.push>`
     - :py:func:`dockerng.rmi <salt.modules.dockerng.rmi>`
     - :py:func:`dockerng.save <salt.modules.dockerng.save>`
     - :py:func:`dockerng.tag <salt.modules.dockerng.tag>`
+- Network Management
+    - :py:func:`dockerng.networks <salt.modules.dockerng.networks>`
+    - :py:func:`dockerng.create_network <salt.modules.dockerng.create_network>`
+    - :py:func:`dockerng.remove_network <salt.modules.dockerng.remove_network>`
+    - :py:func:`dockerng.inspect_network
+      <salt.modules.dockerng.inspect_network>`
+    - :py:func:`dockerng.connect_container_to_network
+      <salt.modules.dockerng.connect_container_to_network>`
+    - :py:func:`dockerng.disconnect_container_from_network
+      <salt.modules.dockerng.disconnect_container_from_network>`
+
+
 
 .. _docker-execution-driver:
 
@@ -221,6 +246,7 @@ import distutils.version  # pylint: disable=import-error,no-name-in-module,unuse
 import fnmatch
 import functools
 import gzip
+import inspect as inspect_module
 import json
 import logging
 import os
@@ -233,6 +259,7 @@ import time
 
 # Import Salt libs
 from salt.exceptions import CommandExecutionError, SaltInvocationError
+from salt.ext.six.moves import map  # pylint: disable=import-error,redefined-builtin
 from salt.utils.decorators \
     import identical_signature_wrapper as _mimic_signature
 import salt.utils
@@ -243,6 +270,7 @@ import salt.ext.six as six
 # pylint: disable=import-error
 try:
     import docker
+    import docker.utils
     HAS_DOCKER_PY = True
 except ImportError:
     HAS_DOCKER_PY = False
@@ -273,8 +301,8 @@ __func_alias__ = {
 }
 
 # Minimum supported versions
-MIN_DOCKER = (1, 0, 0)
-MIN_DOCKER_PY = (1, 0, 0)
+MIN_DOCKER = (1, 4, 0)
+MIN_DOCKER_PY = (1, 4, 0)
 
 VERSION_RE = r'([\d.]+)'
 
@@ -401,9 +429,9 @@ VALID_CREATE_OPTS = {
     'cpuset': {
         'path': 'Config:Cpuset',
     },
-}
-
-VALID_RUNTIME_OPTS = {
+    'labels': {
+      'path': 'Config:Labels',
+    },
     'binds': {
         'path': 'HostConfig:Binds',
     },
@@ -475,6 +503,7 @@ def __virtual__():
             docker_py_versioninfo = _get_docker_py_versioninfo()
         except CommandExecutionError:
             docker_py_versioninfo = None
+
         # Don't let a failure to interpret the version keep this module from
         # loading. Log a warning (log happens in _get_docker_py_versioninfo()).
         if docker_py_versioninfo is None \
@@ -483,35 +512,29 @@ def __virtual__():
                 docker_versioninfo = version().get('VersionInfo')
             except CommandExecutionError:
                 docker_versioninfo = None
+
             if docker_versioninfo is None or docker_versioninfo >= MIN_DOCKER:
                 return __virtualname__
             else:
-                log.warning(
+                return (False,
                     'Insufficient Docker version for dockerng (required: '
                     '{0}, installed: {1})'.format(
-                        '.'.join(docker_versioninfo),
-                        '.'.join(MIN_DOCKER)
-                    )
-                )
-    return False
+                        '.'.join(map(str, MIN_DOCKER)),
+                        '.'.join(map(str, docker_versioninfo))))
+        else:
+            return (False,
+                'Insufficient docker-py version for dockerng (required: '
+                '{0}, installed: {1})'.format(
+                    '.'.join(map(str, MIN_DOCKER_PY)),
+                    '.'.join(map(str, docker_py_versioninfo))))
+    return (False, 'Docker module could not get imported')
 
 
 def _get_docker_py_versioninfo():
     '''
     Returns a version_info tuple for docker-py
     '''
-    contextkey = 'docker.docker_py_version'
-    if contextkey in __context__:
-        return __context__[contextkey]
-    match = re.match(VERSION_RE, str(docker.__version__))
-    if match:
-        __context__[contextkey] = tuple(
-            [int(x) for x in match.group(1).split('.')]
-        )
-    else:
-        log.warning('Unable to determine docker-py version')
-        __context__[contextkey] = None
-    return __context__[contextkey]
+    return docker.version_info
 
 
 # Decorators
@@ -534,6 +557,30 @@ class _api_version(object):
                     'This function requires a Docker API version of at least '
                     '{0}. API version in use is {1}.'
                     .format(self.api_version, current_api_version)
+                )
+            return func(*args, **salt.utils.clean_kwargs(**kwargs))
+        return _mimic_signature(func, wrapper)
+
+
+class _client_version(object):
+    '''
+    Enforce a specific Docker client version
+    '''
+    def __init__(self, version):
+        self.version = distutils.version.StrictVersion(version)
+
+    def __call__(self, func):
+        def wrapper(*args, **kwargs):
+            '''
+            Get the current client version and check it against the one passed
+            '''
+            _get_client()
+            current_version = '.'.join(map(str, _get_docker_py_versioninfo()))
+            if distutils.version.StrictVersion(current_version) < self.version:
+                raise CommandExecutionError(
+                    'This function requires a Docker Client version of at least '
+                    '{0}. Version in use is {1}.'
+                    .format(self.version, current_version)
                 )
             return func(*args, **salt.utils.clean_kwargs(**kwargs))
         return _mimic_signature(func, wrapper)
@@ -569,6 +616,21 @@ def _ensure_exists(wrapped):
                 'Container \'{0}\' does not exist'.format(name)
             )
         return wrapped(name, *args, **salt.utils.clean_kwargs(**kwargs))
+    return wrapper
+
+
+def _refresh_mine_cache(wrapped):
+    '''
+    Decorator to trigger a refresh of salt mine data.
+    '''
+    @functools.wraps(wrapped)
+    def wrapper(*args, **kwargs):
+        '''
+        refresh salt mine on exit.
+        '''
+        returned = wrapped(*args, **salt.utils.clean_kwargs(**kwargs))
+        __salt__['mine.send']('dockerng.ps', verbose=True, all=True, host=True)
+        return returned
     return wrapper
 
 
@@ -608,7 +670,7 @@ def _clear_context():
         'docker.client', 'docker.exec_driver', 'dockerng._pull_status',
         'docker.docker_version', 'docker.docker_py_version'
     )
-    for key in __context__.keys():
+    for key in list(__context__):
         try:
             if key.startswith('docker.') and key not in keep_context:
                 __context__.pop(key)
@@ -628,7 +690,7 @@ def _get_client(timeout=None):
     Set those keys in your configuration tree somehow:
 
         - docker.url: URL to the docker service
-        - docker.version: API version to use
+        - docker.version: API version to use (default: "auto")
     '''
     if 'docker.client' not in __context__:
         client_kwargs = {}
@@ -641,6 +703,11 @@ def _get_client(timeout=None):
         if 'base_url' not in client_kwargs and 'DOCKER_HOST' in os.environ:
             # Check if the DOCKER_HOST environment variable has been set
             client_kwargs['base_url'] = os.environ.get('DOCKER_HOST')
+
+        if 'version' not in client_kwargs:
+            # Let docker-py auto detect docker version incase
+            # it's not defined by user.
+            client_kwargs['version'] = 'auto'
 
         __context__['docker.client'] = docker.Client(**client_kwargs)
 
@@ -968,28 +1035,18 @@ def _push_status(data, item):
     '''
     Process a status update from a docker push, updating the data structure
     '''
-    status = item['status']
+    status = item['status'].lower()
     if 'id' in item:
-        if 'already pushed' in status:
+        if 'already pushed' in status or 'already exists' in status:
             # Layer already exists
             already_pushed = data.setdefault('Layers', {}).setdefault(
                 'Already_Pushed', [])
             already_pushed.append(item['id'])
-        elif 'successfully pushed' in status:
+        elif 'successfully pushed' in status or status == 'pushed':
             # Pushed a new layer
             pushed = data.setdefault('Layers', {}).setdefault(
                 'Pushed', [])
             pushed.append(item['id'])
-    else:
-        try:
-            image_id = re.match(
-                r'Pushing tags? for rev \[([0-9a-f]+)',
-                status
-            ).group(1)
-        except AttributeError:
-            return
-        else:
-            data['Id'] = image_id
 
 
 def _error_detail(data, item):
@@ -1007,8 +1064,7 @@ def _error_detail(data, item):
     data.append(msg)
 
 
-def _validate_input(action,
-                    kwargs,
+def _validate_input(kwargs,
                     validate_ip_addrs=True):
     '''
     Perform validation on kwargs. Checks each key in kwargs against the
@@ -1070,6 +1126,13 @@ def _validate_input(action,
                             for x in kwargs[key]]):
             raise SaltInvocationError(key + ' must be a list of strings')
 
+    def _valid_dictlist(key):  # pylint: disable=unused-variable
+        '''
+        Ensure the passed value is a list of dictionaries.
+        '''
+        if not salt.utils.is_dictlist(kwargs[key]):
+            raise SaltInvocationError(key + ' must be a list of dictionaries.')
+
     # Custom validation functions for container creation options
     def _valid_command():  # pylint: disable=unused-variable
         '''
@@ -1082,14 +1145,14 @@ def _validate_input(action,
         if isinstance(kwargs['command'], six.string_types):
             # Translate command into a list of strings
             try:
-                kwargs['command'] = shlex.split(kwargs['command'])
+                kwargs['command'] = salt.utils.shlex_split(kwargs['command'])
             except AttributeError:
                 pass
         try:
             _valid_stringlist('command')
         except SaltInvocationError:
             raise SaltInvocationError(
-                'command must be a string or list of strings'
+                'command/cmd must be a string or list of strings'
             )
 
     def _valid_user():  # pylint: disable=unused-variable
@@ -1226,7 +1289,7 @@ def _validate_input(action,
         if isinstance(kwargs['entrypoint'], six.string_types):
             # Translate entrypoint into a list of strings
             try:
-                kwargs['entrypoint'] = shlex.split(kwargs['entrypoint'])
+                kwargs['entrypoint'] = salt.utils.shlex_split(kwargs['entrypoint'])
             except AttributeError:
                 pass
         try:
@@ -1262,7 +1325,7 @@ def _validate_input(action,
                         )
                     if not isinstance(val, six.string_types):
                         raise SaltInvocationError(
-                            'Environment values must be strings {key}={val!r}'
+                            'Environment values must be strings {key}=\'{val}\''
                             .format(key=key, val=val))
                     repacked_env[key] = val
             kwargs['environment'] = repacked_env
@@ -1270,7 +1333,7 @@ def _validate_input(action,
             for key, val in six.iteritems(kwargs['environment']):
                 if not isinstance(val, six.string_types):
                     raise SaltInvocationError(
-                        'Environment values must be strings {key}={val!r}'
+                        'Environment values must be strings {key}=\'{val}\''
                         .format(key=key, val=val))
         elif not isinstance(kwargs['environment'], dict):
             raise SaltInvocationError(
@@ -1350,10 +1413,14 @@ def _validate_input(action,
                 raise SaltInvocationError(err)
 
             if not os.path.isabs(host_path):
-                raise SaltInvocationError(
-                    'Host path {0} in bind {1} is not absolute'
-                    .format(host_path, bind)
-                )
+                if os.path.sep in host_path:
+                    raise SaltInvocationError(
+                        'Host path {0} in bind {1} is not absolute'
+                        .format(container_path, bind)
+                    )
+                log.warn('Host path {0} in bind {1} is not absolute,'
+                         ' assuming it is a docker volume.'.format(host_path,
+                                                                   bind))
             if not os.path.isabs(container_path):
                 raise SaltInvocationError(
                     'Container path {0} in bind {1} is not absolute'
@@ -1520,11 +1587,16 @@ def _validate_input(action,
                 # Ensure that the user didn't just pass 'container:', because
                 # that would be invalid.
                 return
-            raise SaltInvocationError()
+            else:
+                # just a name assume it is a network
+                log.info(
+                    'Assuming network_mode \'{0}\' is a network.'.format(
+                      kwargs['network_mode'])
+                )
         except SaltInvocationError:
             raise SaltInvocationError(
-                'network_mode must be one of \'bridge\', \'host\', or '
-                '\'container:<id or name>\''
+                'network_mode must be one of \'bridge\', \'host\', '
+                '\'container:<id or name>\' or a name of a network.'
             )
 
     def _valid_restart_policy():  # pylint: disable=unused-variable
@@ -1604,16 +1676,33 @@ def _validate_input(action,
                 'pid_mode can only be \'host\', if set'
             )
 
-    # And now, the actual logic to perform the validation
-    if action == 'create':
-        valid_opts = VALID_CREATE_OPTS
-    elif action == 'runtime':
-        valid_opts = VALID_RUNTIME_OPTS
-    else:
-        raise SaltInvocationError(
-            'Invalid validation action \'{0}\''.format(action)
-        )
+    def _valid_labels():  # pylint: disable=unused-variable
+        '''
+        Must be a dict or a list of strings
+        '''
+        if kwargs.get('labels') is None:
+            return
+        try:
+            _valid_stringlist('labels')
+        except SaltInvocationError:
+            try:
+                _valid_dictlist('labels')
+            except SaltInvocationError:
+                try:
+                    _valid_dict('labels')
+                except SaltInvocationError:
+                    raise SaltInvocationError(
+                        'labels can only be a list of strings/dict'
+                        ' or a dict containing strings')
+                else:
+                    new_labels = {}
+                    for k, v in six.iteritems(kwargs['labels']):
+                        new_labels[str(k)] = str(v)
+                    kwargs['labels'] = new_labels
+            else:
+                kwargs['labels'] = salt.utils.repack_dictlist(kwargs['labels'])
 
+    # And now, the actual logic to perform the validation
     if 'docker.docker_version' not in __context__:
         # Have to call this func using the __salt__ dunder (instead of just
         # version()) because this _validate_input() will be imported into the
@@ -1631,40 +1720,40 @@ def _validate_input(action,
 
     _locals = locals()
     for kwarg in kwargs:
-        if kwarg not in valid_opts:
+        if kwarg not in VALID_CREATE_OPTS:
             raise SaltInvocationError('Invalid argument \'{0}\''.format(kwarg))
 
         # Check for Docker/docker-py compatibility
         compat_errors = []
-        if 'min_docker' in valid_opts[kwarg]:
-            min_docker = valid_opts[kwarg]['min_docker']
+        if 'min_docker' in VALID_CREATE_OPTS[kwarg]:
+            min_docker = VALID_CREATE_OPTS[kwarg]['min_docker']
             if __context__['docker.docker_version'] is not None:
                 if __context__['docker.docker_version'] < min_docker:
                     compat_errors.append(
                         'The \'{0}\' parameter requires at least Docker {1} '
                         '(detected version {2})'.format(
                             kwarg,
-                            '.'.join(min_docker),
+                            '.'.join(map(str, min_docker)),
                             '.'.join(__context__['docker.docker_version'])
                         )
                     )
-        if 'min_docker_py' in valid_opts[kwarg]:
+        if 'min_docker_py' in VALID_CREATE_OPTS[kwarg]:
             cur_docker_py = _get_docker_py_versioninfo()
             if cur_docker_py is not None:
-                min_docker_py = valid_opts[kwarg]['min_docker_py']
+                min_docker_py = VALID_CREATE_OPTS[kwarg]['min_docker_py']
                 if cur_docker_py < min_docker_py:
                     compat_errors.append(
                         'The \'{0}\' parameter requires at least docker-py '
                         '{1} (detected version {2})'.format(
                             kwarg,
-                            '.'.join(min_docker_py),
-                            '.'.join(cur_docker_py)
+                            '.'.join(map(str, min_docker_py)),
+                            '.'.join(map(str, cur_docker_py))
                         )
                     )
         if compat_errors:
             raise SaltInvocationError('; '.join(compat_errors))
 
-        default_val = valid_opts[kwarg].get('default')
+        default_val = VALID_CREATE_OPTS[kwarg].get('default')
         if kwargs[kwarg] is None:
             if default_val is None:
                 # Passed as None and None is the default. Skip validation. This
@@ -1675,7 +1764,7 @@ def _validate_input(action,
                 # None, don't let them do this.
                 raise SaltInvocationError(kwarg + ' cannot be None')
 
-        validator = valid_opts[kwarg].get('validator')
+        validator = VALID_CREATE_OPTS[kwarg].get('validator')
         if validator is None:
             # Look for custom validation function
             validator = kwarg
@@ -2058,6 +2147,11 @@ def inspect_image(name):
     Retrieves image information. Equivalent to running the ``docker inspect``
     Docker CLI command, but will only look for image information.
 
+    .. note::
+        To inspect an image, it must have been pulled from a registry or built
+        locally. Images on a Docker registry which have not been pulled cannot
+        be inspected.
+
     name
         Image name or ID
 
@@ -2100,7 +2194,10 @@ def list_containers(**kwargs):
     '''
     ret = set()
     for item in six.itervalues(ps_(all=kwargs.get('all', False))):
-        for c_name in [x.lstrip('/') for x in item.get('Names', [])]:
+        names = item.get('Names')
+        if not names:
+            continue
+        for c_name in [x.lstrip('/') for x in names or []]:
             ret.add(c_name)
     return sorted(ret)
 
@@ -2220,7 +2317,7 @@ def port(name, private_port=None):
     return dict((x, mappings[x]) for x in fnmatch.filter(mappings, pattern))
 
 
-def ps_(**kwargs):
+def ps_(filters=None, **kwargs):
     '''
     Returns information about the Docker containers on the Minion. Equivalent
     to running the ``docker ps`` Docker CLI command.
@@ -2228,10 +2325,20 @@ def ps_(**kwargs):
     all : False
         If ``True``, stopped containers will also be returned
 
+    host: False
+        If ``True``, local host's network topology will be included
+
     verbose : False
         If ``True``, a ``docker inspect`` will be run on each container
         returned.
 
+    filters: None
+        A dictionary of filters to be processed on the container list.
+        Available filters:
+
+          - exited (int): Only containers with specified exit code
+          - status (str): One of restarting, running, paused, exited
+          - label (str): format either "key" or "key=value"
 
     **RETURN DATA**
 
@@ -2245,32 +2352,31 @@ def ps_(**kwargs):
 
         salt myminion dockerng.ps
         salt myminion dockerng.ps all=True
+        salt myminion dockerng.ps filters="{'label': 'role=web'}"
     '''
-    if 'docker.ps' not in __context__:
-        response = _client_wrapper('containers', all=True)
-        key_map = {
-            'Created': 'Time_Created_Epoch',
-        }
-        for container in response:
-            c_id = container.pop('Id', None)
-            if c_id is None:
-                continue
-            for item in container:
-                c_state = 'running' \
-                    if container['Status'].lower().startswith('up ') \
-                    else 'stopped'
-                bucket = __context__.setdefault('docker.ps', {}).setdefault(
-                    c_state, {})
-                c_key = key_map.get(item, item)
-                bucket.setdefault(c_id, {})[c_key] = container[item]
-            if 'Time_Created_Epoch' in bucket.get(c_id, {}):
-                bucket[c_id]['Time_Created_Local'] = \
-                    time.strftime(
-                        '%Y-%m-%d %H:%M:%S %Z',
-                        time.localtime(bucket[c_id]['Time_Created_Epoch'])
-                    )
+    response = _client_wrapper('containers', all=True, filters=filters)
+    key_map = {
+        'Created': 'Time_Created_Epoch',
+    }
+    context_data = {}
+    for container in response:
+        c_id = container.pop('Id', None)
+        if c_id is None:
+            continue
+        for item in container:
+            c_state = 'running' \
+                if container.get('Status', '').lower().startswith('up ') \
+                else 'stopped'
+            bucket = context_data.setdefault(c_state, {})
+            c_key = key_map.get(item, item)
+            bucket.setdefault(c_id, {})[c_key] = container[item]
+        if 'Time_Created_Epoch' in bucket.get(c_id, {}):
+            bucket[c_id]['Time_Created_Local'] = \
+                time.strftime(
+                    '%Y-%m-%d %H:%M:%S %Z',
+                    time.localtime(bucket[c_id]['Time_Created_Epoch'])
+                )
 
-    context_data = __context__.get('docker.ps', {})
     ret = copy.deepcopy(context_data.get('running', {}))
     if kwargs.get('all', False):
         ret.update(copy.deepcopy(context_data.get('stopped', {})))
@@ -2280,6 +2386,10 @@ def ps_(**kwargs):
         for c_id in ret:
             ret[c_id]['Info'] = inspect_container(c_id)
 
+    if kwargs.get('host', False):
+        ret.setdefault(
+            'host', {}).setdefault(
+                'interfaces', {}).update(__salt__['network.interfaces']())
     return ret
 
 
@@ -2430,7 +2540,7 @@ def top(name):
 
 def version():
     '''
-    Returns a dictionary of Docker version information. Equivlent to running
+    Returns a dictionary of Docker version information. Equivalent to running
     the ``docker version`` Docker CLI command.
 
     CLI Example:
@@ -2457,8 +2567,10 @@ def version():
 
 
 # Functions to manage containers
+@_refresh_mine_cache
 def create(image,
            name=None,
+           validate_ip_addrs=True,
            client_timeout=CLIENT_TIMEOUT,
            **kwargs):
     '''
@@ -2471,10 +2583,13 @@ def create(image,
     image
         Image from which to create the container
 
-    command
+    command or cmd
         Command to run in the container
 
-        Example: ``command=bash``
+        Example: ``command=bash`` or ``cmd=bash``
+
+        .. versionchanged:: 2015.8.1
+            ``cmd`` is now also accepted
 
     hostname
         Hostname of the container. If not provided, and if a ``name`` has been
@@ -2589,6 +2704,172 @@ def create(image,
 
             This is only used if Salt needs to pull the requested image.
 
+    labels
+        Add Metadata to the container. Can be a list of strings/dictionaries
+        or a dictionary of strings (keys and values).
+
+        Example: ``labels=LABEL1,LABEL2``,
+        ``labels="{'LABEL1': 'value1', 'LABEL2': 'value2'}"``
+
+    validate_ip_addrs : True
+        For parameters which accept IP addresses as input, IP address
+        validation will be performed. To disable, set this to ``False``
+
+    binds
+        Files/directories to bind mount. Each bind mount should be passed in
+        the format ``<host_path>:<container_path>:<read_only>``, where
+        ``<read_only>`` is one of ``rw`` (for read-write access) or ``ro`` (for
+        read-only access).  Optionally, the read-only information can be left
+        off the end and the bind mount will be assumed to be read-write.
+        Examples 2 and 3 below are equivalent.
+
+        Example 1: ``binds=/srv/www:/var/www:ro``
+
+        Example 2: ``binds=/srv/www:/var/www:rw``
+
+        Example 3: ``binds=/srv/www:/var/www``
+
+    port_bindings
+        Bind exposed ports which were exposed using the ``ports`` argument to
+        :py:func:`dockerng.create <salt.modules.dockerng.create>`. These
+        should be passed in the same way as the ``--publish`` argument to the
+        ``docker run`` CLI command:
+
+        - ``ip:hostPort:containerPort`` - Bind a specific IP and port on the
+          host to a specific port within the container.
+        - ``ip::containerPort`` - Bind a specific IP and an ephemeral port to a
+          specific port within the container.
+        - ``hostPort:containerPort`` - Bind a specific port on all of the
+          host's interfaces to a specific port within the container.
+        - ``containerPort`` - Bind an ephemeral port on all of the host's
+          interfaces to a specific port within the container.
+
+        Multiple bindings can be separated by commas, or passed as a Python
+        list. The below two examples are equivalent:
+
+        Example 1: ``port_bindings="5000:5000,2123:2123/udp,8080"``
+
+        Example 2: ``port_bindings="['5000:5000', '2123:2123/udp', '8080']"``
+
+        .. note::
+
+            When configuring bindings for UDP ports, the protocol must be
+            passed in the ``containerPort`` value, as seen in the examples
+            above.
+
+    lxc_conf
+        Additional LXC configuration parameters to set before starting the
+        container.
+
+        Example: ``lxc_conf="{lxc.utsname: docker}"``
+
+        .. note::
+
+            These LXC configuration parameters will only have the desired
+            effect if the container is using the LXC execution driver, which
+            has not been the default for some time.
+
+    publish_all_ports : False
+        Allocates a random host port for each port exposed using the ``ports``
+        argument to :py:func:`dockerng.create <salt.modules.dockerng.create>`.
+
+        Example: ``publish_all_ports=True``
+
+    links
+        Link this container to another. Links should be specified in the format
+        ``<container_name_or_id>:<link_alias>``. Multiple links can be passed,
+        ether as a comma separated list or a Python list.
+
+        Example 1: ``links=mycontainer:myalias``,
+        ``links=web1:link1,web2:link2``
+
+        Example 2: ``links="['mycontainer:myalias']"``
+        ``links="['web1:link1', 'web2:link2']"``
+
+    dns
+        List of DNS nameservers. Can be passed as a comma-separated list or a
+        Python list.
+
+        Example: ``dns=8.8.8.8,8.8.4.4`` or ``dns="[8.8.8.8, 8.8.4.4]"``
+
+        .. note::
+
+            To skip IP address validation, use ``validate_ip_addrs=False``
+
+    dns_search
+        List of DNS search domains. Can be passed as a comma-separated list
+        or a Python list.
+
+        Example: ``dns_search=foo1.domain.tld,foo2.domain.tld`` or
+        ``dns_search="[foo1.domain.tld, foo2.domain.tld]"``
+
+    volumes_from
+        Container names or IDs from which the container will get volumes. Can
+        be passed as a comma-separated list or a Python list.
+
+        Example: ``volumes_from=foo``, ``volumes_from=foo,bar``,
+        ``volumes_from="[foo, bar]"``
+
+    network_mode : bridge
+        One of the following:
+
+        - ``bridge`` - Creates a new network stack for the container on the
+          docker bridge
+        - ``null`` - No networking (equivalent of the Docker CLI argument
+          ``--net=none``)
+        - ``container:<name_or_id>`` - Reuses another container's network stack
+        - ``host`` - Use the host's network stack inside the container
+
+          .. warning::
+
+                Using ``host`` mode gives the container full access to the
+                hosts system's services (such as D-bus), and is therefore
+                considered insecure.
+
+        Example: ``network_mode=null``, ``network_mode=container:web1``
+
+    restart_policy
+        Set a restart policy for the container. Must be passed as a string in
+        the format ``policy[:retry_count]`` where ``policy`` is one of
+        ``always`` or ``on-failure``, and ``retry_count`` is an optional limit
+        to the number of retries. The retry count is ignored when using the
+        ``always`` restart policy.
+
+        Example 1: ``restart_policy=on-failure:5``
+
+        Example 2: ``restart_policy=always``
+
+    cap_add
+        List of capabilities to add within the container. Can be passed as a
+        comma-separated list or a Python list. Requires Docker 1.2.0 or
+        newer.
+
+        Example: ``cap_add=SYS_ADMIN,MKNOD``, ``cap_add="[SYS_ADMIN, MKNOD]"``
+
+    cap_drop
+        List of capabilities to drop within the container. Can be passed as a
+        comma-separated string or a Python list. Requires Docker 1.2.0 or
+        newer.
+
+        Example: ``cap_drop=SYS_ADMIN,MKNOD``,
+        ``cap_drop="[SYS_ADMIN, MKNOD]"``
+
+    extra_hosts
+        Additional hosts to add to the container's /etc/hosts file. Can be
+        passed as a comma-separated list or a Python list. Requires Docker
+        1.3.0 or newer.
+
+        Example: ``extra_hosts=web1:10.9.8.7,web2:10.9.8.8``
+
+        .. note::
+
+            To skip IP address validation, use ``validate_ip_addrs=False``
+
+    pid_mode
+        Set to ``host`` to use the host container's PID namespace within the
+        container. Requires Docker 1.5.0 or newer.
+
+        Example: ``pid_mode=host``
 
     **RETURN DATA**
 
@@ -2607,6 +2888,14 @@ def create(image,
         # Create a CentOS 7 container that will stay running once started
         salt myminion dockerng.create centos:7 name=mycent7 interactive=True tty=True command=bash
     '''
+    if 'cmd' in kwargs:
+        if 'command' in kwargs:
+            raise SaltInvocationError(
+                'Only one of \'command\' and \'cmd\' can be used. Both '
+                'arguments are equivalent.'
+            )
+        kwargs['command'] = kwargs.pop('cmd')
+
     try:
         # Try to inspect the image, if it fails then we know we need to pull it
         # first.
@@ -2620,7 +2909,7 @@ def create(image,
         create_kwargs['hostname'] = create_kwargs['name']
 
     if create_kwargs.pop('validate_input', False):
-        _validate_input('create', create_kwargs)
+        _validate_input(create_kwargs, validate_ip_addrs=validate_ip_addrs)
 
     # Rename the kwargs whose names differ from their counterparts in the
     # docker.client.Client class member functions. Can't use iterators here
@@ -2630,6 +2919,15 @@ def create(image,
             val = VALID_CREATE_OPTS[key]
             if 'api_name' in val:
                 create_kwargs[val['api_name']] = create_kwargs.pop(key)
+
+    # Added to manage api change in 1.19.
+    # mem_limit and memswap_limit must be provided in host_config object
+    if salt.utils.version_cmp(version()['ApiVersion'], '1.18') == 1:
+        client = __context__['docker.client']
+        host_config_args = inspect_module.getargspec(docker.utils.create_host_config).args
+        create_kwargs['host_config'] = client.create_host_config(
+            **dict((arg, create_kwargs.pop(arg, None)) for arg in host_config_args if arg != 'version')
+        )
 
     log.debug(
         'dockerng.create is using the following kwargs to create '
@@ -2755,7 +3053,7 @@ def copy_from(name, source, dest, overwrite=False, makedirs=False):
 
 
 # Docker cp gets a file from the container, alias this to copy_from
-cp = copy_from
+cp = salt.utils.alias_function(copy_from, 'cp')
 
 
 @_ensure_exists
@@ -2995,6 +3293,7 @@ def export(name,
     return ret
 
 
+@_refresh_mine_cache
 @_ensure_exists
 def rm_(name, force=False, volumes=False):
     '''
@@ -3126,7 +3425,10 @@ def build(path=None,
     errors = []
     # Iterate through API response and collect information
     for item in stream_data:
-        item_type = next(iter(item))
+        try:
+            item_type = next(iter(item))
+        except StopIteration:
+            continue
         if item_type == 'status':
             _pull_status(ret, item)
         if item_type == 'stream':
@@ -3345,7 +3647,10 @@ def import_(source,
     errors = []
     # Iterate through API response and collect information
     for item in response:
-        item_type = next(iter(item))
+        try:
+            item_type = next(iter(item))
+        except StopIteration:
+            continue
         if item_type == 'status':
             _import_status(ret, item, repo_name, repo_tag)
         elif item_type == 'errorDetail':
@@ -3555,7 +3860,10 @@ def pull(image,
     errors = []
     # Iterate through API response and collect information
     for item in response:
-        item_type = next(iter(item))
+        try:
+            item_type = next(iter(item))
+        except StopIteration:
+            continue
         if item_type == 'status':
             _pull_status(ret, item)
         elif item_type == 'errorDetail':
@@ -3580,12 +3888,20 @@ def push(image,
          api_response=False,
          client_timeout=CLIENT_TIMEOUT):
     '''
+    .. versionchanged:: 2015.8.4
+        The ``Id`` and ``Image`` keys are no longer present in the return data.
+        This is due to changes in the Docker Remote API.
+
     Pushes an image to a Docker registry. See the documentation at top of this
     page to configure authenticated access.
 
     image
-        Image to be pushed, in ``repo:tag`` notation. If just the repository
-        name is passed, a tag name of ``latest`` will be assumed.
+        Image to be pushed, in ``repo:tag`` notation.
+
+        .. versionchanged:: 2015.8.4
+            If just the repository name is passed, then all tagged images for
+            the specified repo will be pushed. In prior releases, a tag of
+            ``latest`` was assumed if the tag was omitted.
 
     insecure_registry : False
         If ``True``, the Docker client will permit the use of insecure
@@ -3604,8 +3920,6 @@ def push(image,
 
     A dictionary will be returned, containing the following keys:
 
-    - ``Id`` - ID of the image that was pushed
-    - ``Image`` - Name of the image that was pushed
     - ``Layers`` - A dictionary containing one or more of the following keys:
         - ``Already_Pushed`` - Layers that that were already present on the
           Minion
@@ -3620,7 +3934,14 @@ def push(image,
         salt myminion dockerng.push myuser/mycontainer
         salt myminion dockerng.push myuser/mycontainer:mytag
     '''
-    repo_name, repo_tag = _get_repo_tag(image)
+    if ':' in image:
+        repo_name, repo_tag = _get_repo_tag(image)
+    else:
+        repo_name = image
+        repo_tag = None
+        log.info('Attempting to push all tagged images matching {0}'
+                 .format(repo_name))
+
     kwargs = {'tag': repo_tag,
               'stream': True,
               'client_auth': True,
@@ -3644,23 +3965,15 @@ def push(image,
     errors = []
     # Iterate through API response and collect information
     for item in response:
-        item_type = next(iter(item))
+        try:
+            item_type = next(iter(item))
+        except StopIteration:
+            continue
         if item_type == 'status':
             _push_status(ret, item)
         elif item_type == 'errorDetail':
             _error_detail(errors, item)
 
-    if 'Id' not in ret:
-        # API returned information, but there was no confirmation of a
-        # successful push.
-        msg = 'Push failed for {0}'.format(image)
-        if errors:
-            msg += '. Error(s) follow:\n\n{0}'.format(
-                '\n\n'.join(errors)
-            )
-        raise CommandExecutionError(msg)
-
-    ret['Image'] = '{0}:{1}'.format(repo_name, repo_tag)
     return ret
 
 
@@ -3972,8 +4285,258 @@ def tag_(name, image, force=False):
     # Only non-error return case is a True return, so just return the response
     return response
 
+# Network Management
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def networks(names=None, ids=None):
+    '''
+    List existing networks
+
+    names
+        Filter by name
+
+    ids
+        Filter by id
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.networks names="['network-web']"
+        salt myminion dockerng.networks ids="['1f9d2454d0872b68dd9e8744c6e7a4c66b86f10abaccc21e14f7f014f729b2bc']"
+    '''
+    response = _client_wrapper('networks',
+                               names=names,
+                               ids=ids,
+                               )
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def create_network(name, driver=None):
+    '''
+    Create a new network
+
+    network_id
+        ID of network
+
+    driver
+        Driver of the network
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.create_network web_network driver=bridge
+    '''
+    response = _client_wrapper('create_network', name, driver=driver)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def remove_network(network_id):
+    '''
+    Remove a network
+
+    network_id
+        ID of network
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.remove_network 1f9d2454d0872b68dd9e8744c6e7a4c66b86f10abaccc21e14f7f014f729b2bc
+    '''
+    response = _client_wrapper('remove_network', network_id)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def inspect_network(network_id):
+    '''
+    Inspect Network
+
+    network_id
+        ID of network
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.inspect_network 1f9d2454d0872b68dd9e8744c6e7a4c66b86f10abaccc21e14f7f014f729b2bc
+    '''
+    response = _client_wrapper('inspect_network', network_id)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def connect_container_to_network(container, network_id):
+    '''
+    Connect container to network.
+
+    container
+        Container name or ID
+
+    network_id
+        ID of network
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.connect_container_from_network web-1 1f9d2454d0872b68dd9e8744c6e7a4c66b86f10abaccc21e14f7f014f729b2bc
+    '''
+    response = _client_wrapper('connect_container_to_network',
+                               container,
+                               network_id)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def disconnect_container_from_network(container, network_id):
+    '''
+    Disconnect container from network.
+
+    container
+        Container name or ID
+
+    network_id
+        ID of network
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.disconnect_container_from_network web-1 1f9d2454d0872b68dd9e8744c6e7a4c66b86f10abaccc21e14f7f014f729b2bc
+    '''
+    response = _client_wrapper('disconnect_container_from_network',
+                               container,
+                               network_id)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+# Volume Management
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def volumes(filters=None):
+    '''
+    List existing volumes
+
+    .. versionadded:: 2015.8.4
+
+    filters
+      There is one available filter: dangling=true
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.volumes filters="{'dangling': True}"
+    '''
+    response = _client_wrapper('volumes', filters=filters)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def create_volume(name, driver=None, driver_opts=None):
+    '''
+    Create a new volume
+
+    .. versionadded:: 2015.8.4
+
+    name
+        name of volume
+
+    driver
+        Driver of the volume
+
+    driver_opts
+        Options for the driver volume
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.create_volume my_volume driver=local
+    '''
+    response = _client_wrapper('create_volume', name, driver=driver,
+                               driver_opts=driver_opts)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def remove_volume(name):
+    '''
+    Remove a volume
+
+    .. versionadded:: 2015.8.4
+
+    name
+        Name of volume
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.remove_volume my_volume
+    '''
+    response = _client_wrapper('remove_volume', name)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
+
+@_api_version(1.21)
+@_client_version('1.5.0')
+def inspect_volume(name):
+    '''
+    Inspect Volume
+
+    .. versionadded:: 2015.8.4
+
+    name
+      Name of volume
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion dockerng.inspect_volume my_volume
+    '''
+    response = _client_wrapper('inspect_volume', name)
+    _clear_context()
+    # Only non-error return case is a True return, so just return the response
+    return response
+
 
 # Functions to manage container state
+@_refresh_mine_cache
 @_ensure_exists
 def kill(name):
     '''
@@ -4002,6 +4565,7 @@ def kill(name):
     return _change_state(name, 'kill', 'stopped')
 
 
+@_refresh_mine_cache
 @_api_version(1.12)
 @_ensure_exists
 def pause(name):
@@ -4036,7 +4600,7 @@ def pause(name):
                             .format(name))}
     return _change_state(name, 'pause', 'paused')
 
-freeze = pause
+freeze = salt.utils.alias_function(pause, 'freeze')
 
 
 @_ensure_exists
@@ -4076,6 +4640,7 @@ def restart(name, timeout=10):
     return ret
 
 
+@_refresh_mine_cache
 @_ensure_exists
 def signal_(name, signal):
     '''
@@ -4104,174 +4669,14 @@ def signal_(name, signal):
     return True
 
 
+@_refresh_mine_cache
 @_ensure_exists
-def start(name, validate_ip_addrs=True, **kwargs):
+def start(name):
     '''
     Start a container
 
     name
         Container name or ID
-
-    validate_ip_addrs : True
-        For parameters which accept IP addresses as input, IP address
-        validation will be performed. To disable, set this to ``False``
-
-    binds
-        Files/directories to bind mount. Each bind mount should be passed in
-        the format ``<host_path>:<container_path>:<read_only>``, where
-        ``<read_only>`` is one of ``rw`` (for read-write access) or ``ro`` (for
-        read-only access).  Optionally, the read-only information can be left
-        off the end and the bind mount will be assumed to be read-write.
-        Examples 2 and 3 below are equivalent.
-
-        Example 1: ``binds=/srv/www:/var/www:ro``
-
-        Example 2: ``binds=/srv/www:/var/www:rw``
-
-        Example 3: ``binds=/srv/www:/var/www``
-
-    port_bindings
-        Bind exposed ports which were exposed using the ``ports`` argument to
-        :py:func:`dockerng.create <salt.modules.dockerng.create>`. These
-        should be passed in the same way as the ``--publish`` argument to the
-        ``docker run`` CLI command:
-
-        - ``ip:hostPort:containerPort`` - Bind a specific IP and port on the
-          host to a specific port within the container.
-        - ``ip::containerPort`` - Bind a specific IP and an ephemeral port to a
-          specific port within the container.
-        - ``hostPort:containerPort`` - Bind a specific port on all of the
-          host's interfaces to a specific port within the container.
-        - ``containerPort`` - Bind an ephemeral port on all of the host's
-          interfaces to a specific port within the container.
-
-        Multiple bindings can be separated by commas, or passed as a Python
-        list. The below two examples are equivalent:
-
-        Example 1: ``port_bindings="5000:5000,2123:2123/udp,8080"``
-
-        Example 2: ``port_bindings="['5000:5000', '2123:2123/udp', '8080']"``
-
-        .. note::
-
-            When configuring bindings for UDP ports, the protocol must be
-            passed in the ``containerPort`` value, as seen in the examples
-            above.
-
-    lxc_conf
-        Additional LXC configuration parameters to set before starting the
-        container.
-
-        Example: ``lxc_conf="{lxc.utsname: docker}"``
-
-        .. note::
-
-            These LXC configuration parameters will only have the desired
-            effect if the container is using the LXC execution driver, which
-            has not been the default for some time.
-
-    publish_all_ports : False
-        Allocates a random host port for each port exposed using the ``ports``
-        argument to :py:func:`dockerng.create <salt.modules.dockerng.create>`.
-
-        Example: ``publish_all_ports=True``
-
-    links
-        Link this container to another. Links should be specified in the format
-        ``<container_name_or_id>:<link_alias>``. Multiple links can be passed,
-        ether as a comma separated list or a Python list.
-
-        Example 1: ``links=mycontainer:myalias``,
-        ``links=web1:link1,web2:link2``
-
-        Example 2: ``links="['mycontainer:myalias']"``
-        ``links="['web1:link1', 'web2:link2']"``
-
-    dns
-        List of DNS nameservers. Can be passed as a comma-separated list or a
-        Python list.
-
-        Example: ``dns=8.8.8.8,8.8.4.4`` or ``dns="[8.8.8.8, 8.8.4.4]"``
-
-        .. note::
-
-            To skip IP address validation, use ``validate_ip_addrs=False``
-
-    dns_search
-        List of DNS search domains. Can be passed as a comma-separated list
-        or a Python list.
-
-        Example: ``dns_search=foo1.domain.tld,foo2.domain.tld`` or
-        ``dns_search="[foo1.domain.tld, foo2.domain.tld]"``
-
-    volumes_from
-        Container names or IDs from which the container will get volumes. Can
-        be passed as a comma-separated list or a Python list.
-
-        Example: ``volumes_from=foo``, ``volumes_from=foo,bar``,
-        ``volumes_from="[foo, bar]"``
-
-    network_mode : bridge
-        One of the following:
-
-        - ``bridge`` - Creates a new network stack for the container on the
-          docker bridge
-        - ``null`` - No networking (equivalent of the Docker CLI argument
-          ``--net=none``)
-        - ``container:<name_or_id>`` - Reuses another container's network stack
-        - ``host`` - Use the host's network stack inside the container
-
-          .. warning::
-
-                Using ``host`` mode gives the container full access to the
-                hosts system's services (such as D-bus), and is therefore
-                considered insecure.
-
-        Example: ``network_mode=null``, ``network_mode=container:web1``
-
-    restart_policy
-        Set a restart policy for the container. Must be passed as a string in
-        the format ``policy[:retry_count]`` where ``policy`` is one of
-        ``always`` or ``on-failure``, and ``retry_count`` is an optional limit
-        to the number of retries. The retry count is ignored when using the
-        ``always`` restart policy.
-
-        Example 1: ``restart_policy=on-failure:5``
-
-        Example 2: ``restart_policy=always``
-
-    cap_add
-        List of capabilities to add within the container. Can be passed as a
-        comma-separated list or a Python list. Requires Docker 1.2.0 or
-        newer.
-
-        Example: ``cap_add=SYS_ADMIN,MKNOD``, ``cap_add="[SYS_ADMIN, MKNOD]"``
-
-    cap_drop
-        List of capabilities to drop within the container. Can be passed as a
-        comma-separated string or a Python list. Requires Docker 1.2.0 or
-        newer.
-
-        Example: ``cap_drop=SYS_ADMIN,MKNOD``,
-        ``cap_drop="[SYS_ADMIN, MKNOD]"``
-
-    extra_hosts
-        Additional hosts to add to the container's /etc/hosts file. Can be
-        passed as a comma-separated list or a Python list. Requires Docker
-        1.3.0 or newer.
-
-        Example: ``extra_hosts=web1:10.9.8.7,web2:10.9.8.8``
-
-        .. note::
-
-            To skip IP address validation, use ``validate_ip_addrs=False``
-
-    pid_mode
-        Set to ``host`` to use the host container's PID namespace within the
-        container. Requires Docker 1.5.0 or newer.
-
-        Example: ``pid_mode=host``
-
 
     **RETURN DATA**
 
@@ -4296,28 +4701,10 @@ def start(name, validate_ip_addrs=True, **kwargs):
                 'comment': ('Container \'{0}\' is paused, cannot start'
                             .format(name))}
 
-    runtime_kwargs = salt.utils.clean_kwargs(**copy.deepcopy(kwargs))
-    if runtime_kwargs.pop('validate_input', False):
-        _validate_input('runtime',
-                        runtime_kwargs,
-                        validate_ip_addrs=validate_ip_addrs)
-
-    # Rename the kwargs whose names differ from their counterparts in the
-    # docker.client.Client class member functions. Can't use iterators here
-    # because we're going to be modifying the dict.
-    for key in list(six.iterkeys(VALID_RUNTIME_OPTS)):
-        if key in runtime_kwargs:
-            val = VALID_RUNTIME_OPTS[key]
-            if 'api_name' in val:
-                runtime_kwargs[val['api_name']] = runtime_kwargs.pop(key)
-
-    log.debug(
-        'dockerng.start is using the following kwargs to start container '
-        '\'{0}\': {1}'.format(name, runtime_kwargs)
-    )
-    return _change_state(name, 'start', 'running', **runtime_kwargs)
+    return _change_state(name, 'start', 'running')
 
 
+@_refresh_mine_cache
 @_ensure_exists
 def stop(name, timeout=STOP_TIMEOUT, **kwargs):
     '''
@@ -4373,6 +4760,7 @@ def stop(name, timeout=STOP_TIMEOUT, **kwargs):
     return ret
 
 
+@_refresh_mine_cache
 @_api_version(1.12)
 @_ensure_exists
 def unpause(name):
@@ -4407,7 +4795,7 @@ def unpause(name):
                             .format(name))}
     return _change_state(name, 'unpause', 'running')
 
-unfreeze = unpause
+unfreeze = salt.utils.alias_function(unpause, 'unfreeze')
 
 
 def wait(name):
@@ -4443,6 +4831,7 @@ def wait(name):
 
 
 # Functions to run commands inside containers
+@_refresh_mine_cache
 @_ensure_exists
 def _run(name,
          cmd,
@@ -4478,6 +4867,7 @@ def _run(name,
         return ret[output]
 
 
+@_refresh_mine_cache
 def _script(name,
             source,
             saltenv='base',
@@ -4500,8 +4890,12 @@ def _script(name,
         try:
             os.remove(path)
         except (IOError, OSError) as exc:
-            log.error('cmd.script: Unable to clean tempfile {0!r}: {1}'
-                      .format(path, exc))
+            log.error(
+                'cmd.script: Unable to clean tempfile \'{0}\': {1}'.format(
+                    path,
+                    exc
+                )
+            )
 
     path = salt.utils.mkstemp(dir='/tmp',
                               prefix='salt',

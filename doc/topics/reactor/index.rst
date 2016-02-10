@@ -7,10 +7,9 @@
 Reactor System
 ==============
 
-Salt version 0.11.0 introduced the reactor system. The premise behind the
-reactor system is that with Salt's events and the ability to execute commands,
-a logic engine could be put in place to allow events to trigger actions, or
-more accurately, reactions.
+Salt's Reactor system gives Salt the ability to trigger actions in response to
+an event. It is a simple interface to watching Salt's event bus for event tags
+that match a given pattern and then running one or more commands in response.
 
 This system binds sls files to event tags on the master. These sls files then
 define reactions. This means that the reactor system has two parts. First, the
@@ -32,6 +31,8 @@ The event system fires events with a very specific criteria. Every event has a
 addition to the tag, each event has a data structure. This data structure is a
 dict, which contains information about the event.
 
+.. _reactor-mapping-events:
+
 Mapping Events to Reactor SLS Files
 ===================================
 
@@ -52,7 +53,7 @@ and each event tag has a list of reactor SLS files to be run.
         - /srv/reactor/start.sls        # Things to do when a minion starts
         - /srv/reactor/monitor.sls      # Other things to do
 
-      - 'salt/cloud/*/destroyed':       # Globs can be used to matching tags
+      - 'salt/cloud/*/destroyed':       # Globs can be used to match tags
         - /srv/reactor/destroy/*.sls    # Globs can be used to match file names
 
       - 'myco/custom/event/tag':        # React to custom event tags
@@ -88,13 +89,99 @@ can be called:
 
 .. code-block:: yaml
 
-    {% if data['data']['overstate'] == 'refresh' %}
-    overstate_run:
-      runner.state.over
+    {% if data['data']['orchestrate'] == 'refresh' %}
+    orchestrate_run:
+      runner.state.orchestrate
     {% endif %}
 
-This example will execute the state.overstate runner and initiate an overstate
-execution.
+This example will execute the state.orchestrate runner and initiate an
+orchestrate execution.
+
+The Goal of Writing Reactor SLS Files
+=====================================
+
+Reactor SLS files share the familiar syntax from Salt States but there are
+important differences. The goal of a Reactor file is to process a Salt event as
+quickly as possible and then to optionally start a **new** process in response.
+
+1.  The Salt Reactor watches Salt's event bus for new events.
+2.  The event tag is matched against the list of event tags under the
+    ``reactor`` section in the Salt Master config.
+3.  The SLS files for any matches are Rendered into a data structure that
+    represents one or more function calls.
+4.  That data structure is given to a pool of worker threads for execution.
+
+Matching and rendering Reactor SLS files is done sequentially in a single
+process. Complex Jinja that calls out to slow Execution or Runner modules slows
+down the rendering and causes other reactions to pile up behind the current
+one. The worker pool is designed to handle complex and long-running processes
+such as Salt Orchestrate.
+
+tl;dr: Rendering Reactor SLS files MUST be simple and quick. The new process
+started by the worker threads can be long-running.
+
+Jinja Context
+-------------
+
+Reactor files only have access to a minimal Jinja context. ``grains`` and
+``pillar`` are not available. The ``salt`` object is available for calling
+Runner and Execution modules but it should be used sparingly and only for quick
+tasks for the reasons mentioned above.
+
+Advanced State System Capabilities
+----------------------------------
+
+Reactor SLS files, by design, do not support Requisites, ordering,
+``onlyif``/``unless`` conditionals and most other powerful constructs from
+Salt's State system.
+
+Complex Master-side operations are best performed by Salt's Orchestrate system
+so using the Reactor to kick off an Orchestrate run is a very common pairing.
+
+For example:
+
+.. code-block:: yaml
+
+    # /etc/salt/master.d/reactor.conf
+    # A custom event containing: {"foo": "Foo!", "bar: "bar*", "baz": "Baz!"}
+    reactor:
+      - myco/custom/event:
+        - /srv/reactor/some_event.sls
+
+.. code-block:: yaml
+
+    # /srv/reactor/some_event.sls
+    invoke_orchestrate_file:
+      runner.state.orchestrate:
+        - mods: orch.do_complex_thing
+        - pillar:
+            event_tag: {{ tag }}
+            event_data: {{ data | json() }}
+
+.. code-block:: yaml
+
+    # /srv/salt/orch/do_complex_thing.sls
+    {% set tag = salt.pillar.get('event_tag') %}
+    {% set data = salt.pillar.get('event_data') %}
+
+    # Pass data from the event to a custom runner function.
+    # The function expects a 'foo' argument.
+    do_first_thing:
+      salt.runner:
+        - name: custom_runner.custom_function
+        - foo: {{ data.foo }}
+
+    # Wait for the runner to finish then send an execution to minions.
+    # Forward some data from the event down to the minion's state run.
+    do_second_thing:
+      salt.state:
+        - tgt: {{ data.bar }}
+        - sls:
+          - do_thing_on_minion
+        - pillar:
+            baz: {{ data.baz }}
+        - require:
+          - salt: do_first_thing
 
 Fire an event
 =============
@@ -103,10 +190,10 @@ To fire an event from a minion call ``event.send``
 
 .. code-block:: bash
 
-    salt-call event.send 'foo' '{overstate: refresh}'
+    salt-call event.send 'foo' '{orchestrate: refresh}'
 
 After this is called, any reactor sls files matching event tag ``foo`` will
-execute with ``{{ data['data']['overstate'] }}`` equal to ``'refresh'``.
+execute with ``{{ data['data']['orchestrate'] }}`` equal to ``'refresh'``.
 
 See :py:mod:`salt.modules.event` for more information.
 
@@ -182,6 +269,8 @@ rendered SLS file (or any errors generated while rendering the SLS file).
     The rendered output is the result of the Jinja parsing and is a good way to
     view the result of referencing Jinja variables. If the result is empty then
     Jinja produced an empty result and the Reactor will ignore it.
+
+.. _reactor-structure:
 
 Understanding the Structure of Reactor Formulas
 ===============================================
@@ -273,10 +362,10 @@ Any other parameters in the :py:meth:`LocalClient().cmd()
 Calling Runner modules and Wheel modules
 ----------------------------------------
 
-Calling Runner modules and wheel modules from the Reactor uses a more direct
+Calling Runner modules and Wheel modules from the Reactor uses a more direct
 syntax since the function is being executed locally instead of sending a
 command to a remote system to be executed there. There are no 'arg' or 'kwarg'
-parameters (unless the Runner function or Wheel function accepts a paramter
+parameters (unless the Runner function or Wheel function accepts a parameter
 with either of those names.)
 
 For example:
@@ -286,8 +375,8 @@ For example:
     clear_the_grains_cache_for_all_minions:
       runner.cache.clear_grains
 
-If :py:func:`the runner takes arguments <salt.runners.cache.clear_grains>` then
-they can be specified as well:
+If the :py:func:`the runner takes arguments <salt.runners.cloud.profile>` then
+they must be specified as keyword arguments.
 
 .. code-block:: yaml
 
@@ -297,6 +386,9 @@ they can be specified as well:
         - instances:
           - web11       # These VM names would be generated via Jinja in a
           - web12       # real-world example.
+
+To determine the proper names for the arguments, check the documentation
+or source code for the runner function you wish to call.
 
 Passing event data to Minions or Orchestrate as Pillar
 ------------------------------------------------------
@@ -448,12 +540,13 @@ Ink servers in the master configuration.
     highstate_run:
       local.state.highstate:
         - tgt: {{ data['id'] }}
-        - ret: smtp_return
+        - ret: smtp
 
 The above will also return the highstate result data using the `smtp_return`
-returner. The returner needs to be configured on the minion for this to
-work. See :mod:`salt.returners.smtp_return <salt.returners.smtp_return>` documentation for
-that.
+returner (use virtualname like when using from the command line with `--return`).
+The returner needs to be configured on the minion for this to work. 
+See :mod:`salt.returners.smtp_return <salt.returners.smtp_return>` documentation 
+for that.
 
 .. _minion-start-reactor:
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
 Manage IAM roles
+================
 
 .. versionadded:: 2014.7.0
 
@@ -62,16 +63,28 @@ with the role. This is the default behavior of the AWS console.
     # Using a credentials profile from pillars
     myrole:
         boto_iam_role.present:
-            - region: us-east-1
             - profile: myiamprofile
 
     # Passing in a credentials profile
     myrole:
         boto_iam_role.present:
-            - region: us-east-1
             - profile:
                 key: GKTADJGHEIQSXMKKRBJ08H
                 keyid: askdjghsdfjkghWupUjasdflkdfklgjsdfjajkghs
+                region: us-east-1
+
+If ``delete_policies: False`` is specified, existing policies that are not in
+the given list of policies will not be deleted. This allows manual modifications
+on the IAM role to be persistent. This functionality was added in 2015.8.0.
+
+.. note::
+
+    When using the ``profile`` parameter and ``region`` is set outside of
+    the profile group, region is ignored and a default region will be used.
+
+    If ``region`` is missing from the ``profile`` data set, ``us-east-1``
+    will be used as the default region.
+
 '''
 from __future__ import absolute_import
 import salt.utils.dictupdate as dictupdate
@@ -95,7 +108,8 @@ def present(
         region=None,
         key=None,
         keyid=None,
-        profile=None):
+        profile=None,
+        delete_policies=True):
     '''
     Ensure the IAM role exists.
 
@@ -136,6 +150,13 @@ def present(
     profile
         A dict with region, key and keyid, or a pillar key (string)
         that contains a dict with region, key and keyid.
+
+    delete_policies
+        Deletes existing policies that are not in the given list of policies. Default
+        value is ``True``. If ``False`` is specified, existing policies will not be deleted
+        allowing manual modifications on the IAM role to be persistent.
+
+        .. versionadded:: 2015.8.0
     '''
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
     _ret = _role_present(name, policy_document, path, region, key, keyid,
@@ -170,7 +191,8 @@ def present(
             ret['result'] = _ret['result']
             if ret['result'] is False:
                 return ret
-    _ret = _policies_present(name, _policies, region, key, keyid, profile)
+    _ret = _policies_present(name, _policies, region, key, keyid, profile,
+                             delete_policies)
     ret['changes'] = dictupdate.update(ret['changes'], _ret['changes'])
     ret['comment'] = ' '.join([ret['comment'], _ret['comment']])
     if not _ret['result']:
@@ -305,7 +327,8 @@ def _policies_present(
         region=None,
         key=None,
         keyid=None,
-        profile=None):
+        profile=None,
+        delete_policies=True):
     ret = {'result': True, 'comment': '', 'changes': {}}
     policies_to_create = {}
     policies_to_delete = []
@@ -318,7 +341,7 @@ def _policies_present(
     _list = __salt__['boto_iam.list_role_policies'](name, region, key, keyid,
                                                     profile)
     for policy_name in _list:
-        if policy_name not in policies:
+        if delete_policies and policy_name not in policies:
             policies_to_delete.append(policy_name)
     if policies_to_create or policies_to_delete:
         _to_modify = list(policies_to_delete)
@@ -357,7 +380,7 @@ def _policies_present(
                                                                 profile)
                 ret['changes']['new'] = {'policies': _list}
                 ret['result'] = False
-                msg = 'Failed to add policy {0} to role {1}'
+                msg = 'Failed to remove policy {0} from role {1}'
                 ret['comment'] = msg.format(policy_name, name)
                 return ret
         _list = __salt__['boto_iam.list_role_policies'](name, region, key,

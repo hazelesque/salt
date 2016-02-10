@@ -3,7 +3,7 @@
 Manage Windows features via the ServerManager powershell module
 '''
 from __future__ import absolute_import
-
+import logging
 
 # Import python libs
 try:
@@ -14,6 +14,8 @@ except ImportError:
 # Import salt libs
 import salt.utils
 
+log = logging.getLogger(__name__)
+
 
 def __virtual__():
     '''
@@ -21,7 +23,7 @@ def __virtual__():
     '''
     if salt.utils.is_windows():
         return 'win_servermanager'
-    return False
+    return (False, 'The win_servermanager module cannot be loaded: OS not windows.')
 
 
 def _srvmgr(func):
@@ -37,6 +39,8 @@ def _srvmgr(func):
 def _parse_powershell_list(lst):
     '''
     Parse command output when piped to format-list
+    Need to look at splitting with ':' so you can get the full value
+    Need to check for error codes and return false if it's trying to parse
     '''
     ret = {}
     for line in lst.splitlines():
@@ -47,6 +51,7 @@ def _parse_powershell_list(lst):
             #                    baz}
             if len(splt) > 2:
                 ret[splt[0]] = splt[2]
+    ret['message'] = lst
     return ret
 
 
@@ -65,7 +70,8 @@ def list_available():
 
 def list_installed():
     '''
-    List installed features
+    List installed features. Supported on Windows Server 2008 and Windows 8 and
+    newer.
 
     CLI Example:
 
@@ -80,10 +86,12 @@ def list_installed():
         name = splt.pop(-1)
         display_name = ' '.join(splt)
         ret[name] = display_name
-    state = _srvmgr('Get-WindowsFeature -erroraction silentlycontinue -warningaction silentlycontinue | Select InstallState,Name')
+    state = _srvmgr('Get-WindowsFeature -erroraction silentlycontinue -warningaction silentlycontinue | Select Installed,Name')
     for line in state.splitlines()[2:]:
         splt = line.split()
-        if splt[0] != 'Installed' and splt[1] in ret:
+        if splt[0] == 'False' and splt[1] in ret:
+            del ret[splt[1]]
+        if '----' in splt[0]:
             del ret[splt[1]]
     return ret
 

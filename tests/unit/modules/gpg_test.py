@@ -10,13 +10,13 @@ from __future__ import absolute_import
 from salttesting import TestCase, skipIf
 from salttesting.mock import (
     MagicMock,
+    mock_open,
     patch,
     NO_MOCK,
     NO_MOCK_REASON
 )
 
 from salttesting.helpers import ensure_in_syspath
-from mock import mock_open
 
 ensure_in_syspath('../../')
 
@@ -37,7 +37,7 @@ RET = [{'created': '2014-07-25',
 
 class Mockgnupg(object):
     '''
-    Mock smtplib class
+    Mock gnupg class
     '''
     __version__ = '1.3.1'
     fingerprint = u'F321F'
@@ -54,7 +54,7 @@ class Mockgnupg(object):
 
     class GPG(object):
         '''
-        Mock smtplib class
+        Mock gnupg class
         '''
         def __init__(self, gnupghome='/tmp/salt/.gnupg',
                      homedir='/tmp/salt/.gnupg'):
@@ -336,6 +336,10 @@ class GpgTestCase(TestCase):
                 self.assertRaises(SaltInvocationError, gpg.import_key,
                                   filename='/path/to/public-key-file')
 
+            gpg.GPG_1_3_1 = True
+            self.assertDictEqual(gpg.import_key(text='-BEGIN PGP PUBLIC KEY BLOCK-'), ret)
+
+            gpg.GPG_1_3_1 = False
             self.assertDictEqual(gpg.import_key(text='-BEGIN PGP PUBLIC KEY BLOCK-'), ret)
 
     # 'export_key' function tests: 1

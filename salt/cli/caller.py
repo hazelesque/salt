@@ -6,12 +6,12 @@ minion modules.
 
 # Import python libs
 from __future__ import absolute_import, print_function
+
 import os
 import sys
 import time
 import logging
 import traceback
-import multiprocessing
 
 # Import salt libs
 import salt
@@ -27,6 +27,9 @@ from salt.log import LOG_LEVELS
 from salt.utils import is_windows
 from salt.utils import print_cli
 from salt.utils import kinds
+from salt.utils import activate_profile
+from salt.utils import output_profile
+from salt.utils.process import MultiprocessingProcess
 from salt.cli import daemons
 
 try:
@@ -123,8 +126,16 @@ class BaseCaller(object):
         '''
         Execute the salt call logic
         '''
+        profiling_enabled = self.opts.get('profiling_enabled', False)
         try:
-            ret = self.call()
+            pr = activate_profile(profiling_enabled)
+            try:
+                ret = self.call()
+            finally:
+                output_profile(pr,
+                               stats_path=self.opts.get('profiling_path',
+                                                        '/tmp/stats'),
+                               stop=True)
             out = ret.get('out', 'nested')
             if self.opts['metadata']:
                 print_ret = ret
@@ -315,7 +326,7 @@ class RAETCaller(BaseCaller):
             if (opts.get('__role') ==
                     kinds.APPL_KIND_NAMES[kinds.applKinds.caller]):
                 # spin up and fork minion here
-                self.process = multiprocessing.Process(target=raet_minion_run,
+                self.process = MultiprocessingProcess(target=raet_minion_run,
                                     kwargs={'cleanup_protecteds': [self.stack.ha], })
                 self.process.start()
                 # wait here until '/var/run/salt/minion/alpha_caller.manor.uxd' exists

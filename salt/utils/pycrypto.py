@@ -32,6 +32,7 @@ def secure_password(length=20):
     '''
     Generate a secure password.
     '''
+    length = int(length)
     pw = ''
     while len(pw) < length:
         if HAS_RANDOM:
@@ -53,7 +54,7 @@ def gen_hash(crypt_salt=None, password=None, algorithm='sha512'):
     )
     if algorithm not in hash_algorithms:
         raise SaltInvocationError(
-            'Algorithm {0!r} is not supported'.format(algorithm)
+            'Algorithm \'{0}\' is not supported'.format(algorithm)
         )
 
     if password is None:

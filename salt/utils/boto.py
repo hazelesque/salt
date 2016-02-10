@@ -7,7 +7,7 @@ Note: This module depends on the dicts packed by the loader and,
 therefore, must be accessed via the loader or from the __utils__ dict.
 
 The __utils__ dict will not be automatically available to execution modules
-until Beryllium. The `salt.utils.compat.pack_dunder` helper function
+until 2015.8.0. The `salt.utils.compat.pack_dunder` helper function
 provides backwards compatibility.
 
 This module provides common functionality for the boto execution modules.
@@ -31,7 +31,7 @@ Example Usage:
             conn = _get_conn()
             vpc_id = _cache_id('test-vpc')
 
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 '''
 
 # Import Python libs
@@ -46,7 +46,6 @@ from functools import partial
 from salt.ext.six import string_types  # pylint: disable=import-error
 from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
 from salt.exceptions import SaltInvocationError
-from salt._compat import ElementTree as ET
 
 # Import third party libs
 # pylint: disable=import-error
@@ -80,39 +79,24 @@ def __virtual__():
         return True
 
 
-def _option(value):
-    '''
-    Look up the value for an option.
-    '''
-    if value in __opts__:
-        return __opts__[value]
-    master_opts = __pillar__.get('master', {})
-    if value in master_opts:
-        return master_opts[value]
-    if value in __pillar__:
-        return __pillar__[value]
-
-
 def _get_profile(service, region, key, keyid, profile):
     if profile:
         if isinstance(profile, string_types):
-            _profile = _option(profile)
+            _profile = __salt__['config.option'](profile)
         elif isinstance(profile, dict):
             _profile = profile
         key = _profile.get('key', None)
         keyid = _profile.get('keyid', None)
         region = _profile.get('region', None)
-
-    if not region and _option(service + '.region'):
-        region = _option(service + '.region')
+    if not region and __salt__['config.option'](service + '.region'):
+        region = __salt__['config.option'](service + '.region')
 
     if not region:
         region = 'us-east-1'
-
-    if not key and _option(service + '.key'):
-        key = _option(service + '.key')
-    if not keyid and _option(service + '.keyid'):
-        keyid = _option(service + '.keyid')
+    if not key and __salt__['config.option'](service + '.key'):
+        key = __salt__['config.option'](service + '.key')
+    if not keyid and __salt__['config.option'](service + '.keyid'):
+        keyid = __salt__['config.option'](service + '.keyid')
 
     label = 'boto_{0}:'.format(service)
     if keyid:
@@ -222,26 +206,26 @@ def get_connection_func(service, module=None):
 
 
 def get_error(e):
+    # The returns from boto modules vary greatly between modules. We need to
+    # assume that none of the data we're looking for exists.
     aws = {}
-    if e.status:
+    if hasattr(e, 'status'):
         aws['status'] = e.status
-    if e.reason:
+    if hasattr(e, 'reason'):
         aws['reason'] = e.reason
+    if hasattr(e, 'message') and e.message != '':
+        aws['message'] = e.message
+    if hasattr(e, 'error_code') and e.error_code is not None:
+        aws['code'] = e.error_code
 
-    try:
-        body = e.body or ''
-        error = ET.fromstring(body).find('Errors').find('Error')
-        error = {'code': error.find('Code').text,
-                 'message': error.find('Message').text}
-    except (AttributeError, ET.ParseError):
-        error = None
-
-    if error:
-        aws.update(error)
-        message = '{0}: {1}'.format(aws.get('reason', ''),
-                                    error['message'])
+    if 'message' in aws and 'reason' in aws:
+        message = '{0}: {1}'.format(aws['reason'], aws['message'])
+    elif 'message' in aws:
+        message = aws['message']
+    elif 'reason' in aws:
+        message = aws['reason']
     else:
-        message = aws.get('reason')
+        message = ''
     r = {'message': message}
     if aws:
         r['aws'] = aws
@@ -261,7 +245,7 @@ def exactly_one(l):
     return exactly_n(l)
 
 
-def assign_funcs(modname, service, module=None):
+def assign_funcs(modname, service, module=None, pack=None):
     '''
     Assign _get_conn and _cache_id functions to the named module.
 
@@ -269,6 +253,9 @@ def assign_funcs(modname, service, module=None):
 
         _utils__['boto.assign_partials'](__name__, 'ec2')
     '''
+    if pack:
+        global __salt__  # pylint: disable=W0601
+        __salt__ = pack
     mod = sys.modules[modname]
     setattr(mod, '_get_conn', get_connection_func(service, module=module))
     setattr(mod, '_cache_id', cache_id_func(service))

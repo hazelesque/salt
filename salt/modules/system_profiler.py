@@ -14,6 +14,7 @@ from __future__ import absolute_import
 import plistlib
 import subprocess
 import salt.utils
+from salt.ext import six
 
 PROFILER_BINARY = '/usr/sbin/system_profiler'
 
@@ -26,8 +27,8 @@ def __virtual__():
 
     if PROFILER_BINARY:
         return True
-    else:
-        return False
+    return (False, 'The system_profiler execution module cannot be loaded: '
+            'system_profiler unavailable.')
 
 
 def _call_system_profiler(datatype):
@@ -41,7 +42,10 @@ def _call_system_profiler(datatype):
          '-xml', datatype], stdout=subprocess.PIPE)
     (sysprofresults, sysprof_stderr) = p.communicate(input=None)
 
-    plist = plistlib.readPlistFromString(sysprofresults)
+    if six.PY2:
+        plist = plistlib.readPlistFromString(sysprofresults)
+    else:
+        plist = plistlib.readPlistFromBytes(sysprofresults)
 
     try:
         apps = plist[0]['_items']
@@ -54,8 +58,7 @@ def _call_system_profiler(datatype):
 def receipts():
     '''
     Return the results of a call to
-    `system_profiler -xml -detail full
-                     SPInstallHistoryDataType`
+    ``system_profiler -xml -detail full SPInstallHistoryDataType``
     as a dictionary.  Top-level keys of the dictionary
     are the names of each set of install receipts, since
     there can be multiple receipts with the same name.
@@ -95,12 +98,11 @@ def receipts():
 def applications():
     '''
     Return the results of a call to
-    `system_profiler -xml -detail full
-                     SPApplicationsDataType`
+    ``system_profiler -xml -detail full SPApplicationsDataType``
     as a dictionary.  Top-level keys of the dictionary
     are the names of each set of install receipts, since
     there can be multiple receipts with the same name.
-    Contents of each key are a list of dicttionaries.
+    Contents of each key are a list of dictionaries.
 
     Note that this can take a long time depending on how many
     applications are installed on the target Mac.

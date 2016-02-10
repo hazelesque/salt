@@ -22,7 +22,7 @@ def __virtual__():
     '''
     if salt.utils.which('lvm'):
         return __virtualname__
-    return False
+    return (False, 'The linux_lvm execution module cannot be loaded: the lvm binary is not in the path.')
 
 
 def version():
@@ -391,7 +391,7 @@ def vgremove(vgname):
         salt mymachine lvm.vgremove vgname
         salt mymachine lvm.vgremove vgname force=True
     '''
-    cmd = ['vgremove' '-f', vgname]
+    cmd = ['vgremove', '-f', vgname]
     out = __salt__['cmd.run'](cmd, python_shell=False)
     return out.strip()
 

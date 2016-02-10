@@ -2,7 +2,7 @@
 '''
 Manage nspawn containers
 
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 `systemd-nspawn(1)`__ is a tool used to manage lightweight namespace
 containers. This execution module provides several functions to help manage
@@ -60,7 +60,8 @@ def __virtual__():
             log.error('nspawn: Unable to determine systemd version')
         else:
             return __virtualname__
-    return False
+    return (False, 'The nspawn execution module failed to load: '
+            'only work on systems that have been booted with systemd.')
 
 
 def _sd_version():
@@ -862,7 +863,7 @@ def list_running():
 
 # 'machinectl list' shows only running containers, so allow this to work as an
 # alias to nspawn.list_running
-list_ = list_running
+list_ = salt.utils.alias_function(list_running, 'list_')
 
 
 def list_stopped():
@@ -1236,7 +1237,7 @@ def remove(name, stop=False):
 
 
 # Compatibility between LXC and nspawn
-destroy = remove
+destroy = salt.utils.alias_function(remove, 'destroy')
 
 
 @_ensure_exists
@@ -1292,7 +1293,7 @@ def copy_to(name, source, dest, overwrite=False, makedirs=False):
         overwrite=overwrite,
         makedirs=makedirs)
 
-cp = copy_to
+cp = salt.utils.alias_function(copy_to, 'cp')
 
 
 # Everything below requres systemd >= 219
@@ -1455,4 +1456,4 @@ def pull_dkr(url, name, index):
     '''
     return _pull_image('dkr', url, name, index=index)
 
-pull_docker = pull_dkr
+pull_docker = salt.utils.alias_function(pull_dkr, 'pull_docker')

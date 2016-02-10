@@ -27,12 +27,13 @@ from salt.exceptions import (
 from salt.ext.six.moves import range
 
 log = logging.getLogger(__name__)
+DEFAULT_SSH_PORT = 22
 
 
 def __virtual__():
     # TODO: This could work on windows with some love
     if salt.utils.is_windows():
-        return False
+        return (False, 'The module cannot be loaded on windows.')
     return True
 
 
@@ -63,7 +64,7 @@ def _refine_enc(enc):
         return 'ssh-ed25519'
     else:
         raise CommandExecutionError(
-            'Incorrect encryption key type {0!r}.'.format(enc)
+            'Incorrect encryption key type \'{0}\'.'.format(enc)
         )
 
 
@@ -113,7 +114,7 @@ def _get_config_file(user, config):
     '''
     uinfo = __salt__['user.info'](user)
     if not uinfo:
-        raise CommandExecutionError('User {0!r} does not exist'.format(user))
+        raise CommandExecutionError('User \'{0}\' does not exist'.format(user))
     home = uinfo['home']
     if not os.path.isabs(config):
         config = os.path.join(home, config)
@@ -733,7 +734,7 @@ def _parse_openssh_output(lines):
 
 
 @decorators.which('ssh-keygen')
-def get_known_host(user, hostname, config=None):
+def get_known_host(user, hostname, config=None, port=None):
     '''
     Return information about known host from the configfile, if any.
     If there is no such key, return None.
@@ -749,17 +750,54 @@ def get_known_host(user, hostname, config=None):
     if isinstance(full, dict):
         return full
 
-    cmd = 'ssh-keygen -F "{0}" -f "{1}"'.format(hostname, full)
-    lines = __salt__['cmd.run'](cmd, ignore_retcode=True,
+    ssh_hostname = _hostname_and_port_to_ssh_hostname(hostname, port)
+    cmd = ['ssh-keygen', '-F', ssh_hostname, '-f', full]
+    lines = __salt__['cmd.run'](cmd,
+                                ignore_retcode=True,
                                 python_shell=False).splitlines()
     known_hosts = list(_parse_openssh_output(lines))
     return known_hosts[0] if known_hosts else None
 
 
 @decorators.which('ssh-keyscan')
-def recv_known_host(hostname, enc=None, port=None, hash_hostname=False):
+def recv_known_host(hostname,
+                    enc=None,
+                    port=None,
+                    hash_hostname=True,
+                    hash_known_hosts=True,
+                    timeout=5):
     '''
     Retrieve information about host public key from remote server
+
+    hostname
+        The name of the remote host (e.g. "github.com")
+
+    enc
+        Defines what type of key is being used, can be ed25519, ecdsa ssh-rsa
+        or ssh-dss
+
+    port
+        optional parameter, denoting the port of the remote host, which will be
+        used in case, if the public key will be requested from it. By default
+        the port 22 is used.
+
+    hash_hostname : True
+        Hash all hostnames and addresses in the known hosts file.
+
+        .. deprecated:: Carbon
+
+            Please use hash_known_hosts instead.
+
+    hash_known_hosts : True
+        Hash all hostnames and addresses in the known hosts file.
+
+    timeout : int
+        Set the timeout for connection attempts.  If ``timeout`` seconds have
+        elapsed since a connection was initiated to a host or since the last
+        time anything was read from that host, then the connection is closed
+        and the host in question considered unavailable.  Default is 5 seconds.
+
+        .. versionadded:: Boron
 
     CLI Example:
 
@@ -767,28 +805,37 @@ def recv_known_host(hostname, enc=None, port=None, hash_hostname=False):
 
         salt '*' ssh.recv_known_host <hostname> enc=<enc> port=<port>
     '''
+
+    if not hash_hostname:
+        salt.utils.warn_until(
+            'Carbon',
+            'The hash_hostname parameter is misleading as ssh-keygen can only '
+            'hash the whole known hosts file, not entries for individual '
+            'hosts. Please use hash_known_hosts=False instead.')
+        hash_known_hosts = hash_hostname
+
     # The following list of OSes have an old version of openssh-clients
     # and thus require the '-t' option for ssh-keyscan
-    need_dash_t = ['CentOS-5']
+    need_dash_t = ('CentOS-5',)
 
-    chunks = ['ssh-keyscan']
+    cmd = ['ssh-keyscan']
     if port:
-        chunks += ['-p', str(port)]
+        cmd.extend(['-p', port])
     if enc:
-        chunks += ['-t', str(enc)]
+        cmd.extend(['-t', enc])
     if not enc and __grains__.get('osfinger') in need_dash_t:
-        chunks += ['-t', 'rsa']
-    if hash_hostname:
-        chunks.append('-H')
-    chunks.append(str(hostname))
-    cmd = ' '.join(chunks)
+        cmd.extend(['-t', 'rsa'])
+    if hash_known_hosts:
+        cmd.append('-H')
+    cmd.extend(['-T', str(timeout)])
+    cmd.append(hostname)
     lines = __salt__['cmd.run'](cmd, python_shell=False).splitlines()
     known_hosts = list(_parse_openssh_output(lines))
     return known_hosts[0] if known_hosts else None
 
 
 def check_known_host(user=None, hostname=None, key=None, fingerprint=None,
-                     config=None):
+                     config=None, port=None):
     '''
     Check the record in known_hosts file, either by its value or by fingerprint
     (it's enough to set up either key or fingerprint, you don't need to set up
@@ -815,9 +862,9 @@ def check_known_host(user=None, hostname=None, key=None, fingerprint=None,
     else:
         config = config or '.ssh/known_hosts'
 
-    known_host = get_known_host(user, hostname, config=config)
+    known_host = get_known_host(user, hostname, config=config, port=port)
 
-    if not known_host:
+    if not known_host or 'fingerprint' not in known_host:
         return 'add'
     if key:
         return 'exists' if key == known_host['key'] else 'update'
@@ -828,7 +875,7 @@ def check_known_host(user=None, hostname=None, key=None, fingerprint=None,
         return 'exists'
 
 
-def rm_known_host(user=None, hostname=None, config=None):
+def rm_known_host(user=None, hostname=None, config=None, port=None):
     '''
     Remove all keys belonging to hostname from a known_hosts file.
 
@@ -851,7 +898,8 @@ def rm_known_host(user=None, hostname=None, config=None):
         return {'status': 'error',
                 'error': 'Known hosts file {0} does not exist'.format(full)}
 
-    cmd = 'ssh-keygen -R "{0}" -f "{1}"'.format(hostname, full)
+    ssh_hostname = _hostname_and_port_to_ssh_hostname(hostname, port)
+    cmd = ['ssh-keygen', '-R', ssh_hostname, '-f', full]
     cmd_result = __salt__['cmd.run'](cmd, python_shell=False)
     # ssh-keygen creates a new file, thus a chown is required.
     if os.geteuid() == 0 and user:
@@ -867,7 +915,9 @@ def set_known_host(user=None,
                    port=None,
                    enc=None,
                    hash_hostname=True,
-                   config=None):
+                   config=None,
+                   hash_known_hosts=True,
+                   timeout=5):
     '''
     Download SSH public key from remote host "hostname", optionally validate
     its fingerprint against "fingerprint" variable and save the record in the
@@ -875,6 +925,52 @@ def set_known_host(user=None,
 
     If such a record does already exists in there, do nothing.
 
+    user
+        The user who owns the ssh authorized keys file to modify
+
+    hostname
+        The name of the remote host (e.g. "github.com")
+
+    fingerprint
+        The fingerprint of the key which must be presented in the known_hosts
+        file (optional if key specified)
+
+    key
+        The public key which must be presented in the known_hosts file
+        (optional if fingerprint specified)
+
+    port
+        optional parameter, denoting the port of the remote host, which will be
+        used in case, if the public key will be requested from it. By default
+        the port 22 is used.
+
+    enc
+        Defines what type of key is being used, can be ed25519, ecdsa ssh-rsa
+        or ssh-dss
+
+    hash_hostname : True
+        Hash all hostnames and addresses in the known hosts file.
+
+        .. deprecated:: Carbon
+
+            Please use hash_known_hosts instead.
+
+    config
+        The location of the authorized keys file relative to the user's home
+        directory, defaults to ".ssh/known_hosts". If no user is specified,
+        defaults to "/etc/ssh/ssh_known_hosts". If present, must be an
+        absolute path when a user is not specified.
+
+    hash_known_hosts : True
+        Hash all hostnames and addresses in the known hosts file.
+
+    timeout : int
+        Set the timeout for connection attempts.  If ``timeout`` seconds have
+        elapsed since a connection was initiated to a host or since the last
+        time anything was read from that host, then the connection is closed
+        and the host in question considered unavailable.  Default is 5 seconds.
+
+        .. versionadded:: Boron
 
     CLI Example:
 
@@ -885,9 +981,23 @@ def set_known_host(user=None,
     if not hostname:
         return {'status': 'error',
                 'error': 'hostname argument required'}
+
+    if not hash_hostname:
+        salt.utils.warn_until(
+            'Carbon',
+            'The hash_hostname parameter is misleading as ssh-keygen can only '
+            'hash the whole known hosts file, not entries for individual '
+            'hosts. Please use hash_known_hosts=False instead.')
+        hash_known_hosts = hash_hostname
+
+    if port is not None and port != DEFAULT_SSH_PORT and hash_known_hosts:
+        return {'status': 'error',
+                'error': 'argument port can not be used in '
+                'conjunction with argument hash_known_hosts'}
+
     update_required = False
     check_required = False
-    stored_host = get_known_host(user, hostname, config)
+    stored_host = get_known_host(user, hostname, config, port)
 
     if not stored_host:
         update_required = True
@@ -905,7 +1015,8 @@ def set_known_host(user=None,
         remote_host = recv_known_host(hostname,
                                       enc=enc,
                                       port=port,
-                                      hash_hostname=hash_hostname)
+                                      hash_known_hosts=hash_known_hosts,
+                                      timeout=timeout)
         if not remote_host:
             return {'status': 'error',
                     'error': 'Unable to receive remote host key'}
@@ -930,7 +1041,12 @@ def set_known_host(user=None,
 
     if key:
         remote_host = {'hostname': hostname, 'enc': enc, 'key': key}
-    line = '{hostname} {enc} {key}\n'.format(**remote_host)
+
+    if hash_known_hosts or port in [DEFAULT_SSH_PORT, None] or ':' in remote_host['hostname']:
+        line = '{hostname} {enc} {key}\n'.format(**remote_host)
+    else:
+        remote_host['port'] = port
+        line = '[{hostname}]:{port} {enc} {key}\n'.format(**remote_host)
 
     # ensure ~/.ssh exists
     ssh_dir = os.path.dirname(full)
@@ -953,9 +1069,6 @@ def set_known_host(user=None,
             os.chown(ssh_dir, uinfo['uid'], uinfo['gid'])
             os.chmod(ssh_dir, 0o700)
 
-    if key:
-        cmd_result = __salt__['ssh.hash_known_hosts'](user=user, config=full)
-
     # write line to known_hosts file
     try:
         with salt.utils.fopen(full, 'a') as ofile:
@@ -968,6 +1081,9 @@ def set_known_host(user=None,
     if os.geteuid() == 0 and user:
         os.chown(full, uinfo['uid'], uinfo['gid'])
     os.chmod(full, 0o644)
+
+    if key and hash_known_hosts:
+        cmd_result = __salt__['ssh.hash_known_hosts'](user=user, config=full)
 
     return {'status': 'updated', 'old': stored_host, 'new': remote_host}
 
@@ -1056,6 +1172,13 @@ def hash_known_hosts(user=None, config=None):
 
     .. versionadded:: 2014.7.0
 
+    user
+        hash known hosts of this user
+
+    config
+        path to known hosts file: can be absolute or relative to user's home
+        directory
+
     CLI Example:
 
     .. code-block:: bash
@@ -1066,15 +1189,22 @@ def hash_known_hosts(user=None, config=None):
     full = _get_known_hosts_file(config=config, user=user)
 
     if isinstance(full, dict):
-        return full
+        return full  # full contains error information
 
     if not os.path.isfile(full):
         return {'status': 'error',
                 'error': 'Known hosts file {0} does not exist'.format(full)}
-    cmd = 'ssh-keygen -H -f "{0}"'.format(full)
+    cmd = ['ssh-keygen', '-H', '-f', full]
     cmd_result = __salt__['cmd.run'](cmd, python_shell=False)
     # ssh-keygen creates a new file, thus a chown is required.
     if os.geteuid() == 0 and user:
         uinfo = __salt__['user.info'](user)
         os.chown(full, uinfo['uid'], uinfo['gid'])
     return {'status': 'updated', 'comment': cmd_result}
+
+
+def _hostname_and_port_to_ssh_hostname(hostname, port=DEFAULT_SSH_PORT):
+    if not port or port == DEFAULT_SSH_PORT:
+        return hostname
+    else:
+        return '[{0}]:{1}'.format(hostname, port)

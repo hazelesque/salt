@@ -22,11 +22,12 @@ ensure_in_syspath('../../')
 from salt.states import npm
 
 npm.__salt__ = {}
-npm.__opts__ = {}
+npm.__opts__ = {'test': False}
 
 
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 class NpmTestCase(TestCase):
+
     '''
     Test cases for salt.states.npm
     '''
@@ -56,7 +57,7 @@ class NpmTestCase(TestCase):
             with patch.dict(npm.__opts__, {'test': True}):
                 comt = ("Package(s) 'coffee-script' "
                         "satisfied by coffee-script@1.2")
-                ret.update({'comment': comt, 'result': None})
+                ret.update({'comment': comt, 'result': True})
                 self.assertDictEqual(npm.installed(name), ret)
 
             with patch.dict(npm.__opts__, {'test': False}):

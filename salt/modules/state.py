@@ -1,26 +1,36 @@
 # -*- coding: utf-8 -*-
 '''
-Control the state system on the minion
+Control the state system on the minion.
+
+State Caching
+-------------
+
+When a highstate is called, the minion automatically caches a copy of the last
+high data. If you then run a highstate with cache=True it will use that cached
+highdata and won't hit the fileserver except for ``salt://`` links in the
+states themselves.
 '''
 
 # Import python libs
-from __future__ import absolute_import
-import os
-import json
+from __future__ import absolute_import, print_function
 import copy
-import shutil
-import time
+import fnmatch
+import json
 import logging
+import os
+import shutil
+import sys
 import tarfile
 import tempfile
+import time
 
 # Import salt libs
 import salt.config
+import salt.payload
+import salt.state
 import salt.utils
 import salt.utils.jid
 import salt.utils.url
-import salt.state
-import salt.payload
 from salt.exceptions import SaltInvocationError
 
 # Import 3rd-party libs
@@ -38,6 +48,7 @@ __outputter__ = {
     'template': 'highstate',
     'template_str': 'highstate',
     'apply': 'highstate',
+    'apply_': 'highstate',
     'request': 'highstate',
     'check_request': 'highstate',
     'run_request': 'highstate',
@@ -95,9 +106,9 @@ def _wait(jid):
 
 def running(concurrent=False):
     '''
-    Return a dict of state return data if a state function is already running.
-    This function is used to prevent multiple state calls from being run at
-    the same time.
+    Return a list of strings that contain state return data if a state function is
+    already running. This function is used to prevent multiple state calls from being
+    run at the same time.
 
     CLI Example:
 
@@ -175,7 +186,10 @@ def low(data, queue=False, **kwargs):
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
         return conflict
-    st_ = salt.state.State(__opts__)
+    try:
+        st_ = salt.state.State(__opts__, proxy=__proxy__)
+    except NameError:
+        st_ = salt.state.State(__opts__)
     err = st_.verify_data(data)
     if err:
         __context__['retcode'] = 1
@@ -212,11 +226,19 @@ def high(data, test=False, queue=False, **kwargs):
         opts['test'] = __opts__.get('test', None)
 
     pillar = kwargs.get('pillar')
-    if pillar is not None and not isinstance(pillar, dict):
+    pillar_enc = kwargs.get('pillar_enc')
+    if pillar_enc is None \
+            and pillar is not None \
+            and not isinstance(pillar, dict):
         raise SaltInvocationError(
-            'Pillar data must be formatted as a dictionary'
+            'Pillar data must be formatted as a dictionary, unless pillar_enc '
+            'is specified.'
         )
-    st_ = salt.state.State(__opts__, pillar)
+    try:
+        st_ = salt.state.State(__opts__, pillar, pillar_enc=pillar_enc, proxy=__proxy__)
+    except NameError:
+        st_ = salt.state.State(__opts__, pillar, pillar_enc=pillar_enc)
+
     ret = st_.call_high(data)
     _set_retcode(ret)
     return ret
@@ -235,13 +257,25 @@ def template(tem, queue=False, **kwargs):
 
         salt '*' state.template '<Path to template on the minion>'
     '''
+    if 'env' in kwargs:
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' '
+            'not \'env\'. This functionality will be removed in Salt Boron.'
+        )
+        saltenv = kwargs['env']
+    elif 'saltenv' in kwargs:
+        saltenv = kwargs['saltenv']
+    else:
+        saltenv = ''
+
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
         return conflict
     st_ = salt.state.HighState(__opts__)
     if not tem.endswith('.sls'):
         tem = '{sls}.sls'.format(sls=tem)
-    high_state, errors = st_.render_state(tem, None, '', None, local=True)
+    high_state, errors = st_.render_state(tem, saltenv, '', None, local=True)
     if errors:
         __context__['retcode'] = 1
         return errors
@@ -263,7 +297,10 @@ def template_str(tem, queue=False, **kwargs):
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
         return conflict
-    st_ = salt.state.State(__opts__)
+    try:
+        st_ = salt.state.State(__opts__, proxy=__proxy__)
+    except NameError:
+        st_ = salt.state.State(__opts__)
     ret = st_.call_template_str(tem)
     _set_retcode(ret)
     return ret
@@ -439,20 +476,40 @@ def highstate(test=None,
 
         Sets the ``test`` variable in the minion ``opts`` for the duration of
         the state run.
+
     pillar
-        Custom Pillar data can be passed with the ``pillar`` kwarg. Values
-        passed here will override hard-coded Pillar values.
-    queue : ``False``
+        Additional pillar data to use for this function. Any pillar keys
+        specified here will overwrite matching keys in the Pillar data.
+
+        .. versionchanged:: Boron
+            GPG-encrypted CLI Pillar data is now supported via the GPG
+            renderer. See :ref:`here <encrypted-cli-pillar-data>` for details.
+
+    pillar_enc
+        Specify which renderer to use to decrypt encrypted data located within
+        the ``pillar`` value. Currently, only ``gpg`` is supported.
+
+        .. versionadded:: Boron
+
+    queue : False
         Instead of failing immediately when another state run is in progress,
         queue the new state run to begin running once the other has finished.
 
         This option starts a new thread for each queued state run so use this
         option sparingly.
-    localconfig:
+
+    localconfig
         Instead of using running minion opts, load ``localconfig`` and merge that
         with the running minion opts. This functionality is intended for using
         "roots" of salt directories (with their own minion config, pillars,
         file_roots) to run highstate out of.
+
+    mock:
+        The mock option allows for the state run to execute without actually
+        calling any states. This then returns a mocked return which will show
+        the requisite ordering as well as fully validate the state run.
+
+        .. versionadded:: 2015.8.4
 
     CLI Example:
 
@@ -467,6 +524,7 @@ def highstate(test=None,
         salt '*' state.highstate pillar="{foo: 'Foo!', bar: 'Bar!'}"
     '''
     if _disabled(['highstate']):
+        log.debug('Salt highstate run is disabled. To re-enable, run state.enable highstate')
         ret = {
             'name': 'Salt highstate run is disabled. To re-enable, run state.enable highstate',
             'result': 'False',
@@ -500,15 +558,32 @@ def highstate(test=None,
         opts['environment'] = kwargs['saltenv']
 
     pillar = kwargs.get('pillar')
-    if pillar is not None and not isinstance(pillar, dict):
+    pillar_enc = kwargs.get('pillar_enc')
+    if pillar_enc is None \
+            and pillar is not None \
+            and not isinstance(pillar, dict):
         raise SaltInvocationError(
-            'Pillar data must be formatted as a dictionary'
+            'Pillar data must be formatted as a dictionary, unless pillar_enc '
+            'is specified.'
         )
 
     if 'pillarenv' in kwargs:
         opts['pillarenv'] = kwargs['pillarenv']
 
-    st_ = salt.state.HighState(opts, pillar, kwargs.get('__pub_jid'))
+    try:
+        st_ = salt.state.HighState(opts,
+                                   pillar,
+                                   kwargs.get('__pub_jid'),
+                                   pillar_enc=pillar_enc,
+                                   proxy=__proxy__,
+                                   mocked=kwargs.get('mock', False))
+    except NameError:
+        st_ = salt.state.HighState(opts,
+                                   pillar,
+                                   kwargs.get('__pub_jid'),
+                                   pillar_enc=pillar_enc,
+                                   mocked=kwargs.get('mock', False))
+
     st_.push_active()
     try:
         ret = st_.call_highstate(
@@ -551,15 +626,28 @@ def sls(mods,
 
         Sets the ``test`` variable in the minion ``opts`` for the duration of
         the state run.
+
     pillar
-        Custom Pillar data can be passed with the ``pillar`` kwarg. Values
-        passed here will override hard-coded Pillar values.
+        Additional pillar data to use for this function. Any pillar keys
+        specified here will overwrite matching keys in the Pillar data.
+
+        .. versionchanged:: Boron
+            GPG-encrypted CLI Pillar data is now supported via the GPG
+            renderer. See :ref:`here <encrypted-cli-pillar-data>` for details.
+
+    pillar_enc
+        Specify which renderer to use to decrypt encrypted data located within
+        the ``pillar`` value. Currently, only ``gpg`` is supported.
+
+        .. versionadded:: Boron
+
     queue : ``False``
         Instead of failing immediately when another state run is in progress,
         queue the new state run to begin running once the other has finished.
 
         This option starts a new thread for each queued state run so use this
         option sparingly.
+
     saltenv : None
         Specify a ``file_roots`` environment.
 
@@ -569,18 +657,28 @@ def sls(mods,
             Defaults to None. If no saltenv is specified, the minion config will
             be checked for a saltenv and if found, it will be used. If none is found,
             base will be used.
+
     pillarenv : None
         Specify a ``pillar_roots`` environment. By default all pillar environments
         merged together will be used.
+
     concurrent:
         WARNING: This flag is potentially dangerous. It is designed
         for use when multiple state runs can safely be run at the same
         Do not use this flag for performance optimization.
+
     localconfig:
         Instead of using running minion opts, load ``localconfig`` and merge that
         with the running minion opts. This functionality is intended for using
         "roots" of salt directories (with their own minion config, pillars,
         file_roots) to run highstate out of.
+
+    mock:
+        The mock option allows for the state run to execute without actually
+        calling any states. This then returns a mocked return which will show
+        the requisite ordering as well as fully validate the state run.
+
+        .. versionadded:: 2015.8.4
 
     CLI Example:
 
@@ -600,7 +698,7 @@ def sls(mods,
         )
         # Backwards compatibility
         saltenv = env
-    if not saltenv:
+    if saltenv is None:
         if __opts__.get('environment', None):
             saltenv = __opts__['environment']
         else:
@@ -628,6 +726,8 @@ def sls(mods,
         disabled = _disabled([mods])
 
     if disabled:
+        for state in disabled:
+            log.debug('Salt state {0} run is disabled. To re-enable, run state.enable {0}'.format(state))
         __context__['retcode'] = 1
         return disabled
 
@@ -647,9 +747,13 @@ def sls(mods,
         opts['test'] = __opts__.get('test', None)
 
     pillar = kwargs.get('pillar')
-    if pillar is not None and not isinstance(pillar, dict):
+    pillar_enc = kwargs.get('pillar_enc')
+    if pillar_enc is None \
+            and pillar is not None \
+            and not isinstance(pillar, dict):
         raise SaltInvocationError(
-            'Pillar data must be formatted as a dictionary'
+            'Pillar data must be formatted as a dictionary, unless pillar_enc '
+            'is specified.'
         )
 
     serial = salt.payload.Serial(__opts__)
@@ -658,13 +762,27 @@ def sls(mods,
             '{0}.cache.p'.format(kwargs.get('cache_name', 'highstate'))
             )
 
-    st_ = salt.state.HighState(opts, pillar, kwargs.get('__pub_jid'))
+    try:
+        st_ = salt.state.HighState(opts,
+                                   pillar,
+                                   kwargs.get('__pub_jid'),
+                                   pillar_enc=pillar_enc,
+                                   proxy=__proxy__,
+                                   mocked=kwargs.get('mock', False))
+    except NameError:
+        st_ = salt.state.HighState(opts,
+                                   pillar,
+                                   kwargs.get('__pub_jid'),
+                                   pillar_enc=pillar_enc,
+                                   mocked=kwargs.get('mock', False))
 
+    umask = os.umask(0o77)
     if kwargs.get('cache'):
         if os.path.isfile(cfn):
             with salt.utils.fopen(cfn, 'rb') as fp_:
                 high_ = serial.load(fp_)
                 return st_.state.call_high(high_)
+    os.umask(umask)
 
     if isinstance(mods, six.string_types):
         mods = mods.split(',')
@@ -701,11 +819,11 @@ def sls(mods,
         msg = 'Unable to write to SLS cache file {0}. Check permission.'
         log.error(msg.format(cache_file))
 
-    os.umask(cumask)
     _set_retcode(ret)
     # Work around Windows multiprocessing bug, set __opts__['test'] back to
     # value from before this function was run.
     __opts__['test'] = orig_test
+
     try:
         with salt.utils.fopen(cfn, 'w+b') as fp_:
             try:
@@ -716,23 +834,27 @@ def sls(mods,
     except (IOError, OSError):
         msg = 'Unable to write to highstate cache file {0}. Do you have permissions?'
         log.error(msg.format(cfn))
+    os.umask(cumask)
     return ret
 
 
 def top(topfn,
         test=None,
         queue=False,
+        saltenv=None,
         **kwargs):
     '''
-    Execute a specific top file instead of the default
+    Execute a specific top file instead of the default. This is useful to apply
+    configurations from a different environment (for example, dev or prod), without
+    modifying the default top file.
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' state.top reverse_top.sls
-        salt '*' state.top reverse_top.sls exclude=sls_to_exclude
-        salt '*' state.top reverse_top.sls exclude="[{'id': 'id_to_exclude'}, {'sls': 'sls_to_exclude'}]"
+        salt '*' state.top prod_top.sls exclude=sls_to_exclude
+        salt '*' state.top dev_top.sls exclude="[{'id': 'id_to_exclude'}, {'sls': 'sls_to_exclude'}]"
     '''
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
@@ -750,14 +872,20 @@ def top(topfn,
         opts['test'] = __opts__.get('test', None)
 
     pillar = kwargs.get('pillar')
-    if pillar is not None and not isinstance(pillar, dict):
+    pillar_enc = kwargs.get('pillar_enc')
+    if pillar_enc is None \
+            and pillar is not None \
+            and not isinstance(pillar, dict):
         raise SaltInvocationError(
-            'Pillar data must be formatted as a dictionary'
+            'Pillar data must be formatted as a dictionary, unless pillar_enc '
+            'is specified.'
         )
 
-    st_ = salt.state.HighState(opts, pillar)
+    st_ = salt.state.HighState(opts, pillar, pillar_enc=pillar_enc)
     st_.push_active()
     st_.opts['state_top'] = salt.utils.url.create(topfn)
+    if saltenv:
+        st_.opts['state_top_saltenv'] = saltenv
     try:
         ret = st_.call_highstate(
                 exclude=kwargs.get('exclude', []),
@@ -789,12 +917,16 @@ def show_highstate(queue=False, **kwargs):
     if conflict is not None:
         return conflict
     pillar = kwargs.get('pillar')
-    if pillar is not None and not isinstance(pillar, dict):
+    pillar_enc = kwargs.get('pillar_enc')
+    if pillar_enc is None \
+            and pillar is not None \
+            and not isinstance(pillar, dict):
         raise SaltInvocationError(
-            'Pillar data must be formatted as a dictionary'
+            'Pillar data must be formatted as a dictionary, unless pillar_enc '
+            'is specified.'
         )
 
-    st_ = salt.state.HighState(__opts__, pillar)
+    st_ = salt.state.HighState(__opts__, pillar, pillar_enc=pillar_enc)
     st_.push_active()
     try:
         ret = st_.compile_highstate()
@@ -977,15 +1109,19 @@ def show_sls(mods, saltenv='base', test=None, queue=False, env=None, **kwargs):
         opts['test'] = __opts__.get('test', None)
 
     pillar = kwargs.get('pillar')
-    if pillar is not None and not isinstance(pillar, dict):
+    pillar_enc = kwargs.get('pillar_enc')
+    if pillar_enc is None \
+            and pillar is not None \
+            and not isinstance(pillar, dict):
         raise SaltInvocationError(
-            'Pillar data must be formatted as a dictionary'
+            'Pillar data must be formatted as a dictionary, unless pillar_enc '
+            'is specified.'
         )
 
     if 'pillarenv' in kwargs:
         opts['pillarenv'] = kwargs['pillarenv']
 
-    st_ = salt.state.HighState(opts, pillar)
+    st_ = salt.state.HighState(opts, pillar, pillar_enc=pillar_enc)
     if isinstance(mods, six.string_types):
         mods = mods.split(',')
     st_.push_active()
@@ -1013,10 +1149,20 @@ def show_top(queue=False, **kwargs):
 
         salt '*' state.show_top
     '''
+    opts = copy.deepcopy(__opts__)
+    if 'env' in kwargs:
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' '
+            'not \'env\'. This functionality will be removed in Salt Boron.'
+        )
+        opts['environment'] = kwargs['env']
+    elif 'saltenv' in kwargs:
+        opts['environment'] = kwargs['saltenv']
     conflict = _check_queue(queue, kwargs)
     if conflict is not None:
         return conflict
-    st_ = salt.state.HighState(__opts__)
+    st_ = salt.state.HighState(opts)
     errors = []
     top_ = st_.get_top()
     errors += st_.verify_tops(top_)
@@ -1063,12 +1209,19 @@ def single(fun, name, test=None, queue=False, **kwargs):
         opts['test'] = __opts__.get('test', None)
 
     pillar = kwargs.get('pillar')
-    if pillar is not None and not isinstance(pillar, dict):
+    pillar_enc = kwargs.get('pillar_enc')
+    if pillar_enc is None \
+            and pillar is not None \
+            and not isinstance(pillar, dict):
         raise SaltInvocationError(
-            'Pillar data must be formatted as a dictionary'
+            'Pillar data must be formatted as a dictionary, unless pillar_enc '
+            'is specified.'
         )
 
-    st_ = salt.state.State(opts, pillar)
+    try:
+        st_ = salt.state.State(opts, pillar, pillar_enc=pillar_enc, proxy=__proxy__)
+    except NameError:
+        st_ = salt.state.State(opts, pillar, pillar_enc=pillar_enc)
     err = st_.verify_data(kwargs)
     if err:
         __context__['retcode'] = 1
@@ -1324,3 +1477,67 @@ def _disabled(funs):
                     ret.append(err)
                     continue
     return ret
+
+
+def event(tagmatch='*',
+        count=-1,
+        quiet=False,
+        sock_dir=None,
+        pretty=False,
+        node='minion'):
+    r'''
+    Watch Salt's event bus and block until the given tag is matched
+
+    .. versionadded:: Boron
+
+    This is useful for utilizing Salt's event bus from shell scripts or for
+    taking simple actions directly from the CLI.
+
+    Enable debug logging to see ignored events.
+
+    :param tagmatch: the event is written to stdout for each tag that matches
+        this pattern; uses the same matching semantics as Salt's Reactor.
+    :param count: this number is decremented for each event that matches the
+        ``tagmatch`` parameter; pass ``-1`` to listen forever.
+    :param quiet: do not print to stdout; just block
+    :param sock_dir: path to the Salt master's event socket file.
+    :param pretty: Output the JSON all on a single line if ``False`` (useful
+        for shell tools); pretty-print the JSON output if ``True``.
+    :param node: Watch the minion-side or master-side event bus.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt-call --local state.event pretty=True
+    '''
+    sevent = salt.utils.event.get_event(
+            node,
+            sock_dir or __opts__['sock_dir'],
+            __opts__['transport'],
+            opts=__opts__,
+            listen=True)
+
+    while True:
+        ret = sevent.get_event(full=True)
+        if ret is None:
+            continue
+
+        if fnmatch.fnmatch(ret['tag'], tagmatch):
+            if not quiet:
+                print('{0}\t{1}'.format(
+                    ret['tag'],
+                    json.dumps(
+                        ret['data'],
+                        sort_keys=pretty,
+                        indent=None if not pretty else 4)))
+                sys.stdout.flush()
+
+            count -= 1
+            log.debug('Remaining event matches: %s', count)
+
+            if count == 0:
+                break
+        else:
+            log.debug('Skipping event tag: %s', ret['tag'])
+            continue

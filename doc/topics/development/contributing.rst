@@ -1,3 +1,5 @@
+.. _contributing:
+
 ============
 Contributing
 ============
@@ -10,6 +12,8 @@ There are a number of ways to contribute to Salt development.
 
 For details on how to contribute documentation improvements please review
 :ref:`Writing Salt Documentation <salt-docs>`.
+
+.. _github-pull-request:
 
 Sending a GitHub pull request
 =============================
@@ -40,8 +44,9 @@ Fork a Repo Guide_>`_ and is well worth reading.
         feature Y".  Multiple unrelated fixes and/or features should be
         isolated into separate branches.
 
-    If you're working on a fix, create your branch from the oldest release
-    branch having the bug.  See :ref:`Which Salt Branch?`.
+    If you're working on a bug or documentation fix, create your branch from
+    the oldest release branch that contains the bug or requires the documentation
+    update. See :ref:`Which Salt Branch? <which-salt-branch>`.
 
     .. code-block:: bash
 
@@ -87,8 +92,8 @@ Fork a Repo Guide_>`_ and is well worth reading.
         #       modified:   path/to/file2
 
 
-    If you get stuck `there are many introductory Git resources on
-    help.github.com <Git resources_>`_.
+    If you get stuck, there are many introductory Git resources on
+    http://help.github.com.
 
 #.  Push your locally-committed changes to your GitHub fork,
 
@@ -155,18 +160,21 @@ Fork a Repo Guide_>`_ and is well worth reading.
 
     Test progress and results can be found at http://jenkins.saltstack.com/.
 
+.. _which-salt-branch:
+
 Which Salt branch?
 ==================
 
 GitHub will open pull requests against Salt's main branch, ``develop``, by
-default.  Ideally features should go into ``develop`` and bug fixes should go
-into the oldest supported release branch affected by the bug.  See
-:ref:`Sending a GitHub pull request`.
+default. Ideally, features should go into ``develop`` and bug fixes and
+documentation changes should go into the oldest supported release branch
+affected by the bug or documentation update.  See
+:ref:`Sending a GitHub pull request <github-pull-request>`.
 
-If you have a bug fix and have already forked your working branch from
-``develop`` and do not know how to rebase your commits against another branch,
-then submit it to ``develop`` anyway and we'll be sure to backport it to the
-correct place.
+If you have a bug fix or doc change and have already forked your working
+branch from ``develop`` and do not know how to rebase your commits against
+another branch, then submit it to ``develop`` anyway and we'll be sure to
+back-port it to the correct place.
 
 The current release branch
 --------------------------
@@ -281,6 +289,8 @@ format-patch`_ and send them to the `salt-users`_ mailing list. The contributor
 will then get credit for the patch, and the Salt community will have an archive
 of the patch and a place for discussion.
 
+.. _backporting-pull-requests:
+
 Backporting Pull Requests
 =========================
 
@@ -355,8 +365,8 @@ Issue and Pull Request Labeling System
 ======================================
 
 SaltStack uses several labeling schemes to help facilitate code contributions
-and bug resolution. See the :doc:`<labels-and-milestones>` documentation for
-more information.
+and bug resolution. See the :ref:`Labels and Milestones
+<labels-and-milestones>` documentation for more information.
 
 .. _`saltstack/salt`: https://github.com/saltstack/salt
 .. _`GitHub Fork a Repo Guide`: https://help.github.com/articles/fork-a-repo

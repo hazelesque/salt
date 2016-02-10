@@ -49,7 +49,9 @@ def __virtual__():
     '''
     if __grains__['os_family'] == 'Debian':
         return __virtualname__
-    return False
+    return (False, 'The debian_ip module could not be loaded: '
+            'unsupported OS family')
+
 
 _ETHTOOL_CONFIG_OPTS = {
     'speed': 'link-speed',
@@ -214,11 +216,11 @@ def _raise_error_routes(iface, option, expected):
 
 def _read_file(path):
     '''
-    Reads and returns the contents of a file
+    Reads and returns the contents of a text file
     '''
     try:
         with salt.utils.flopen(path, 'rb') as contents:
-            return contents.readlines()
+            return [salt.utils.to_str(line) for line in contents.readlines()]
     except (OSError, IOError):
         return ''
 
@@ -242,6 +244,20 @@ def _parse_domainname():
         match = prog.match(item)
         if match:
             return match.group('domain_name')
+    return ''
+
+
+def _parse_searchdomain():
+    '''
+    Parse /etc/resolv.conf and return searchdomain
+    '''
+    contents = _read_file(_DEB_RESOLV_FILE)
+    pattern = r'search\s+(?P<search_domain>\S+)'
+    prog = re.compile(pattern)
+    for item in contents:
+        match = prog.match(item)
+        if match:
+            return match.group('search_domain')
     return ''
 
 
@@ -273,9 +289,11 @@ def _parse_current_network_settings():
 
     hostname = _parse_hostname()
     domainname = _parse_domainname()
+    searchdomain = _parse_searchdomain()
 
     opts['hostname'] = hostname
     opts['domainname'] = domainname
+    opts['searchdomain'] = searchdomain
     return opts
 
 
@@ -360,9 +378,9 @@ def __within2(value, within=None, errmsg=None, dtype=None):
             typename = getattr(dtype, '__name__',
                                hasattr(dtype, '__class__')
                                and getattr(dtype.__class__, 'name', dtype))
-            errmsg = '{0} within {1!r}'.format(typename, within)
+            errmsg = '{0} within \'{1}\''.format(typename, within)
         else:
-            errmsg = 'within {0!r}'.format(within)
+            errmsg = 'within \'{0}\''.format(within)
     return (valid, _value, errmsg)
 
 
@@ -390,6 +408,7 @@ def __space_delimited_list(value):
 
 SALT_ATTR_TO_DEBIAN_ATTR_MAP = {
     'dns': 'dns-nameservers',
+    'search': 'dns-search',
     'hwaddr': 'hwaddress',  # TODO: this limits bootp functionality
     'ipaddr': 'address',
 }
@@ -596,17 +615,13 @@ def _parse_interfaces(interface_files=None):
                         iface_dict['ethtool'][attr] = valuestr
 
                     elif attr.startswith('bond'):
-                        if '-' in attr:
-                            opt = attr.split('-', 1)[1]
-                        elif '_' in attr:
-                            # Just in case configuration still has bond_
-                            opt = attr.split('_', 1)[1]
+                        opt = re.split(r'[_-]', attr, maxsplit=1)[1]
                         if 'bonding' not in iface_dict:
                             iface_dict['bonding'] = salt.utils.odict.OrderedDict()
                         iface_dict['bonding'][opt] = valuestr
 
                     elif attr.startswith('bridge'):
-                        opt = attr.split('-', 1)[1]
+                        opt = re.split(r'[_-]', attr, maxsplit=1)[1]
                         if 'bridging' not in iface_dict:
                             iface_dict['bridging'] = salt.utils.odict.OrderedDict()
                         iface_dict['bridging'][opt] = valuestr
@@ -837,9 +852,12 @@ def _parse_settings_bond_0(opts, iface, bond_def):
     if 'arp_ip_target' in opts:
         if isinstance(opts['arp_ip_target'], list):
             if 1 <= len(opts['arp_ip_target']) <= 16:
-                bond.update({'arp_ip_target': []})
+                bond.update({'arp_ip_target': ''})
                 for ip in opts['arp_ip_target']:  # pylint: disable=C0103
-                    bond['arp_ip_target'].append(ip)
+                    if len(bond['arp_ip_target']) > 0:
+                        bond['arp_ip_target'] = bond['arp_ip_target'] + ',' + ip
+                    else:
+                        bond['arp_ip_target'] = ip
             else:
                 _raise_error_iface(iface, 'arp_ip_target', valid)
         else:
@@ -883,9 +901,9 @@ def _parse_settings_bond_1(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -910,9 +928,12 @@ def _parse_settings_bond_2(opts, iface, bond_def):
     if 'arp_ip_target' in opts:
         if isinstance(opts['arp_ip_target'], list):
             if 1 <= len(opts['arp_ip_target']) <= 16:
-                bond.update({'arp_ip_target': []})
+                bond.update({'arp_ip_target': ''})
                 for ip in opts['arp_ip_target']:  # pylint: disable=C0103
-                    bond['arp_ip_target'].append(ip)
+                    if len(bond['arp_ip_target']) > 0:
+                        bond['arp_ip_target'] = bond['arp_ip_target'] + ',' + ip
+                    else:
+                        bond['arp_ip_target'] = ip
             else:
                 _raise_error_iface(iface, 'arp_ip_target', valid)
         else:
@@ -966,9 +987,9 @@ def _parse_settings_bond_3(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -1010,9 +1031,9 @@ def _parse_settings_bond_4(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -1053,9 +1074,9 @@ def _parse_settings_bond_5(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -1089,9 +1110,9 @@ def _parse_settings_bond_6(opts, iface, bond_def):
 
     if 'use_carrier' in opts:
         if opts['use_carrier'] in _CONFIG_TRUE:
-            bond.update({'use_carrier': 'on'})
+            bond.update({'use_carrier': '1'})
         elif opts['use_carrier'] in _CONFIG_FALSE:
-            bond.update({'use_carrier': 'off'})
+            bond.update({'use_carrier': '0'})
         else:
             valid = _CONFIG_TRUE + _CONFIG_FALSE
             _raise_error_iface(iface, 'use_carrier', valid)
@@ -1263,7 +1284,11 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
                 _optname, valuestr, addrfam=addrfam)
 
             if not valid:
-                _raise_error_iface(iface, '{0!r} {1!r}'.format(opt, valuestr), [errmsg])  # TODO
+                _raise_error_iface(
+                    iface,
+                    '\'{0}\' \'{1}\''.format(opt, valuestr),
+                    [errmsg]
+                )
 
             # replace dashes with underscores for jinja
             _optname = _optname.replace('-', '_')
@@ -1333,6 +1358,9 @@ def _parse_network_settings(opts, current):
         result['hostname'] = opts['hostname']
     else:
         _raise_error_network('hostname', ['server1.example.com'])
+
+    if 'search' in opts:
+        result['search'] = opts['search']
 
     return result
 
@@ -1547,14 +1575,10 @@ def build_bond(iface, **settings):
     _write_file(iface, data, _DEB_NETWORK_CONF_FILES, '{0}.conf'.format(iface))
     path = os.path.join(_DEB_NETWORK_CONF_FILES, '{0}.conf'.format(iface))
     if deb_major == '5':
-        __salt__['cmd.run'](
-            'sed -i -e "/^alias\\s{0}.*/d" /etc/modprobe.conf'.format(iface),
-            python_shell=False
-        )
-        __salt__['cmd.run'](
-            'sed -i -e "/^options\\s{0}.*/d" /etc/modprobe.conf'.format(iface),
-            python_shell=False
-        )
+        for line_type in ('alias', 'options'):
+            cmd = ['sed', '-i', '-e', r'/^{0}\s{1}.*/d'.format(line_type, iface),
+                   '/etc/modprobe.conf']
+            __salt__['cmd.run'](cmd, python_shell=False)
         __salt__['file.append']('/etc/modprobe.conf', path)
 
     # Load kernel module
@@ -1583,6 +1607,9 @@ def build_interface(iface, iface_type, enabled, **settings):
     if iface_type not in _IFACE_TYPES:
         _raise_error_iface(iface, iface_type, _IFACE_TYPES)
 
+    if 'proto' not in settings:
+        settings['proto'] = 'static'
+
     if iface_type == 'slave':
         settings['slave'] = 'yes'
         if 'master' not in settings:
@@ -1607,7 +1634,10 @@ def build_interface(iface, iface_type, enabled, **settings):
 
     elif iface_type == 'bridge':
         if 'ports' not in settings:
-            msg = 'ports is a required setting for bridge interfaces on Debian or Ubuntu based systems'
+            msg = (
+                'ports is a required setting for bridge interfaces on Debian '
+                'or Ubuntu based systems'
+            )
             log.error(msg)
             raise AttributeError(msg)
         __salt__['pkg.install']('bridge-utils')
@@ -1649,17 +1679,27 @@ def build_routes(iface, **settings):
         log.error('Could not load template route_eth.jinja')
         return ''
 
-    add_routecfg = template.render(route_type='add', routes=opts['routes'], iface=iface)
+    add_routecfg = template.render(route_type='add',
+                                   routes=opts['routes'],
+                                   iface=iface)
 
-    del_routecfg = template.render(route_type='del', routes=opts['routes'], iface=iface)
+    del_routecfg = template.render(route_type='del',
+                                   routes=opts['routes'],
+                                   iface=iface)
 
     if 'test' in settings and settings['test']:
         return _read_temp(add_routecfg + del_routecfg)
 
-    filename = _write_file_routes(iface, add_routecfg, _DEB_NETWORK_UP_DIR, 'route-{0}')
+    filename = _write_file_routes(iface,
+                                  add_routecfg,
+                                  _DEB_NETWORK_UP_DIR,
+                                  'route-{0}')
     results = _read_file(filename)
 
-    filename = _write_file_routes(iface, del_routecfg, _DEB_NETWORK_DOWN_DIR, 'route-{0}')
+    filename = _write_file_routes(iface,
+                                  del_routecfg,
+                                  _DEB_NETWORK_DOWN_DIR,
+                                  'route-{0}')
     results += _read_file(filename)
 
     return results
@@ -1678,7 +1718,7 @@ def down(iface, iface_type):
     # Slave devices are controlled by the master.
     # Source 'interfaces' aren't brought down.
     if iface_type not in ['slave', 'source']:
-        return __salt__['cmd.run']('ifdown {0}'.format(iface))
+        return __salt__['cmd.run'](['ifdown', iface])
     return None
 
 
@@ -1738,8 +1778,8 @@ def up(iface, iface_type):  # pylint: disable=C0103
     '''
     # Slave devices are controlled by the master.
     # Source 'interfaces' aren't brought up.
-    if iface_type not in ['slave', 'source']:
-        return __salt__['cmd.run']('ifup {0}'.format(iface))
+    if iface_type not in ('slave', 'source'):
+        return __salt__['cmd.run'](['ifup', iface])
     return None
 
 
@@ -1794,7 +1834,7 @@ def get_routes(iface):
 
     .. code-block:: bash
 
-        salt '*' ip.get_interface eth0
+        salt '*' ip.get_routes eth0
     '''
 
     filename = os.path.join(_DEB_NETWORK_UP_DIR, 'route-{0}'.format(iface))
@@ -1901,6 +1941,7 @@ def build_network_settings(**settings):
     opts['hostname'] = sline[0]
     hostname = '{0}\n' . format(opts['hostname'])
     current_domainname = current_network_settings['domainname']
+    current_searchdomain = current_network_settings['searchdomain']
 
     # Only write the hostname if it has changed
     if not opts['hostname'] == current_network_settings['hostname']:
@@ -1921,18 +1962,38 @@ def build_network_settings(**settings):
         domainname = current_domainname
         opts['domainname'] = domainname
 
+    new_search = False
+    if 'search' in opts:
+        new_searchdomain = opts['search']
+        if new_searchdomain != current_searchdomain:
+            searchdomain = new_searchdomain
+            opts['searchdomain'] = new_searchdomain
+            new_search = True
+        else:
+            searchdomain = current_searchdomain
+            opts['searchdomain'] = searchdomain
+    else:
+        searchdomain = current_searchdomain
+        opts['searchdomain'] = searchdomain
+
     # If the domain changes, then we should write the resolv.conf file.
-    if new_domain:
+    if new_domain or new_search:
         # Look for existing domain line and update if necessary
         contents = _parse_resolve()
-        prog = re.compile(r'domain\s+(?P<domain_name>\S+)')
+        domain_prog = re.compile(r'domain\s+(?P<domain_name>\S+)')
+        search_prog = re.compile(r'search\s+(?P<search_domain>\S+)')
         new_contents = []
         found_domain = False
+        found_search = False
         for item in contents:
-            match = prog.match(item)
-            if match:
+            domain_match = domain_prog.match(item)
+            search_match = search_prog.match(item)
+            if domain_match:
                 new_contents.append('domain {0}\n' . format(domainname))
                 found_domain = True
+            elif search_match:
+                new_contents.append('search {0}\n' . format(searchdomain))
+                found_search = True
             else:
                 new_contents.append(item)
 
@@ -1940,6 +2001,15 @@ def build_network_settings(**settings):
         # with the new domainname
         if not found_domain:
             new_contents.insert(0, 'domain {0}\n' . format(domainname))
+
+        # A search line didn't exist so we'll add one in
+        # with the new search domain
+        if not found_search:
+            if new_contents[0].startswith('domain'):
+                new_contents.insert(1, 'search {0}\n' . format(searchdomain))
+            else:
+                new_contents.insert(0, 'search {0}\n' . format(searchdomain))
+
         new_resolv = ''.join(new_contents)
 
         # Write /etc/resolv.conf

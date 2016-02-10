@@ -38,6 +38,28 @@ these states. Here is some example SLS:
 
     base:
       pkgrepo.managed:
+        - humanname: deb-multimedia
+        - name: deb http://www.deb-multimedia.org stable main
+        - file: /etc/apt/sources.list.d/deb-multimedia.list
+        - key_url: salt://deb-multimedia/files/marillat.pub
+
+.. code-block:: yaml
+
+    base:
+      pkgrepo.managed:
+        - humanname: Google Chrome
+        - name: deb http://dl.google.com/linux/chrome/deb/ stable main
+        - dist: stable
+        - file: /etc/apt/sources.list.d/chrome-browser.list
+        - require_in:
+          - pkg: google-chrome-stable
+        - gpgcheck: 1
+        - key_url: https://dl-ssl.google.com/linux/linux_signing_key.pub
+
+.. code-block:: yaml
+
+    base:
+      pkgrepo.managed:
         - ppa: wolfnet/logstash
       pkg.latest:
         - name: logstash
@@ -63,9 +85,6 @@ these states. Here is some example SLS:
 
 '''
 from __future__ import absolute_import
-
-# Import python libs
-import sys
 
 # Import salt libs
 import salt.utils
@@ -171,7 +190,7 @@ def managed(name, **kwargs):
 
     dist
        This dictates the release of the distro the packages should be built
-       for.  (e.g. unstable)
+       for.  (e.g. unstable). This option is rarely needed.
 
     keyid
        The KeyID of the GPG key to install. This option also requires
@@ -179,10 +198,15 @@ def managed(name, **kwargs):
 
     keyserver
        This is the name of the keyserver to retrieve gpg keys from.  The
-       keyid option must also be set for this option to work.
+       ``keyid`` option must also be set for this option to work.
 
     key_url
-       URL to retrieve a GPG key from.
+       URL to retrieve a GPG key from. Allows the usage of ``http://``,
+       ``https://`` as well as ``salt://``.
+
+       .. note::
+
+           Use either ``keyid``/``keyserver`` or ``key_url``, but not both.
 
     consolidate
        If set to true, this will consolidate all sources definitions to
@@ -195,6 +219,8 @@ def managed(name, **kwargs):
     clean_file
        If set to true, empty file before config repo, dangerous if use
        multiple sources in one file.
+
+       .. versionadded:: 2015.8.0
 
     refresh_db
        If set to false this will skip refreshing the apt package database on
@@ -220,6 +246,13 @@ def managed(name, **kwargs):
                              'and the "ppa" argument.'
             return ret
         kwargs['repo'] = kwargs['name']
+
+    if 'key_url' in kwargs and ('keyid' in kwargs or 'keyserver' in kwargs):
+        ret['result'] = False
+        ret['comment'] = 'You may not use both "keyid"/"keyserver" and ' \
+                         '"key_url" argument.'
+        return ret
+
     if 'ppa' in kwargs and __grains__['os'] in ('Ubuntu', 'Mint'):
         # overload the name/repo value for PPAs cleanly
         # this allows us to have one code-path for PPAs
@@ -230,6 +263,7 @@ def managed(name, **kwargs):
 
     if 'humanname' in kwargs:
         kwargs['name'] = kwargs['humanname']
+        kwargs.pop('humanname')
 
     if kwargs.pop('enabled', None):
         kwargs['disabled'] = False
@@ -301,7 +335,7 @@ def managed(name, **kwargs):
 
     # empty file before configure
     if kwargs.get('clean_file', False):
-        open(kwargs['file'], 'w').close()
+        salt.utils.fopen(kwargs['file'], 'w').close()
 
     try:
         if __grains__['os_family'] == 'Debian':
@@ -335,12 +369,7 @@ def managed(name, **kwargs):
         ret['result'] = False
         ret['comment'] = \
             'Failed to confirm config of repo {0!r}: {1}'.format(name, exc)
-    # Clear cache of available packages, if present, since changes to the
-    # repositories may change the packages that are available.
-    if ret['changes']:
-        sys.modules[
-            __salt__['test.ping'].__module__
-        ].__context__.pop('pkg._avail', None)
+
     return ret
 
 
@@ -460,12 +489,5 @@ def absent(name, **kwargs):
     else:
         ret['result'] = False
         ret['comment'] = 'Failed to remove repo {0}'.format(name)
-
-    # Clear cache of available packages, if present, since changes to the
-    # repositories may change the packages that are available.
-    if ret['changes']:
-        sys.modules[
-            __salt__['test.ping'].__module__
-        ].__context__.pop('pkg._avail', None)
 
     return ret

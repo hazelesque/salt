@@ -22,6 +22,9 @@ import salt.minion
 import salt.log
 from salt.ext.six import string_types
 
+__func_alias__ = {
+    'apply_': 'apply'
+}
 log = logging.getLogger(__name__)
 
 
@@ -106,6 +109,7 @@ def sls(mods, saltenv='base', test=None, exclude=None, env=None, **kwargs):
             __opts__,
             cmd,
             fsclient=__context__['fileclient'],
+            minion_opts=__salt__.minion_opts,
             **st_kwargs)
     single.shell.send(
             trans_tar,
@@ -172,6 +176,7 @@ def low(data, **kwargs):
             __opts__,
             cmd,
             fsclient=__context__['fileclient'],
+            minion_opts=__salt__.minion_opts,
             **st_kwargs)
     single.shell.send(
             trans_tar,
@@ -236,6 +241,7 @@ def high(data, **kwargs):
             __opts__,
             cmd,
             fsclient=__context__['fileclient'],
+            minion_opts=__salt__.minion_opts,
             **st_kwargs)
     single.shell.send(
             trans_tar,
@@ -257,6 +263,28 @@ def high(data, **kwargs):
 
     # If for some reason the json load fails, return the stdout
     return stdout
+
+
+def apply_(mods=None,
+          **kwargs):
+    '''
+    .. versionadded:: 2015.5.3
+
+    Apply states! This function will call highstate or state.sls based on the
+    arguments passed in, state.apply is intended to be the main gateway for
+    all state executions.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' state.apply
+        salt '*' state.apply test
+        salt '*' state.apply test,pkgs
+    '''
+    if mods:
+        return sls(mods, **kwargs)
+    return highstate(**kwargs)
 
 
 def highstate(test=None, **kwargs):
@@ -307,6 +335,7 @@ def highstate(test=None, **kwargs):
             __opts__,
             cmd,
             fsclient=__context__['fileclient'],
+            minion_opts=__salt__.minion_opts,
             **st_kwargs)
     single.shell.send(
             trans_tar,
@@ -378,6 +407,7 @@ def top(topfn, test=None, **kwargs):
             __opts__,
             cmd,
             fsclient=__context__['fileclient'],
+            minion_opts=__salt__.minion_opts,
             **st_kwargs)
     single.shell.send(
             trans_tar,
@@ -602,6 +632,7 @@ def single(fun, name, test=None, **kwargs):
             __opts__,
             cmd,
             fsclient=__context__['fileclient'],
+            minion_opts=__salt__.minion_opts,
             **st_kwargs)
 
     # Copy the tar down

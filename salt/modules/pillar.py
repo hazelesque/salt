@@ -8,6 +8,7 @@ from __future__ import absolute_import
 import collections
 
 # Import third party libs
+import os
 import yaml
 import salt.ext.six as six
 
@@ -15,6 +16,7 @@ import salt.ext.six as six
 import salt.pillar
 import salt.utils
 from salt.defaults import DEFAULT_TARGET_DELIM
+from salt.exceptions import CommandExecutionError
 
 __proxyenabled__ = ['*']
 
@@ -114,7 +116,7 @@ def items(*args, **kwargs):
     return pillar.compile_pillar()
 
 # Allow pillar.data to also be used to return pillar data
-data = items
+data = salt.utils.alias_function(items, 'data')
 
 
 def _obfuscate_inner(var):
@@ -136,7 +138,7 @@ def _obfuscate_inner(var):
 
 def obfuscate(*args):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Same as :py:func:`items`, but replace pillar values with a simple type indication.
 
@@ -150,7 +152,7 @@ def obfuscate(*args):
     Here are some examples:
 
     * ``'secret password'`` becomes ``'<str>'``
-    * ``['secret', 1]`` becomes ``['<str>', '<int>']
+    * ``['secret', 1]`` becomes ``['<str>', '<int>']``
     * ``{'login': 'somelogin', 'pwd': 'secret'}`` becomes
       ``{'login': '<str>', 'pwd': '<str>'}``
 
@@ -168,7 +170,7 @@ def obfuscate(*args):
 # identifier rule.
 def ls(*args):
     '''
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     Calls the master for a fresh pillar, generates the pillar data on the
     fly (same as :py:func:`items`), but only shows the available main keys.
@@ -205,12 +207,18 @@ def item(*args, **kwargs):
         salt '*' pillar.item foo bar baz
     '''
     ret = {}
-    pillar = items(**kwargs)
-    for arg in args:
-        try:
-            ret[arg] = pillar[arg]
-        except KeyError:
-            pass
+    default = kwargs.get('default', '')
+    delimiter = kwargs.get('delimiter', ':')
+
+    try:
+        for arg in args:
+            ret[arg] = salt.utils.traverse_dict_and_list(__pillar__,
+                                                        arg,
+                                                        default,
+                                                        delimiter)
+    except KeyError:
+        pass
+
     return ret
 
 
@@ -271,3 +279,81 @@ def ext(external, pillar=None):
     ret = pillar_obj.compile_pillar()
 
     return ret
+
+
+def keys(key, delimiter=DEFAULT_TARGET_DELIM):
+    '''
+    .. versionadded:: 2015.8.0
+
+    Attempt to retrieve a list of keys from the named value from the pillar.
+
+    The value can also represent a value in a nested dict using a ":" delimiter
+    for the dict, similar to how pillar.get works.
+
+    delimiter
+        Specify an alternate delimiter to use when traversing a nested dict
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' pillar.keys web:sites
+    '''
+    ret = salt.utils.traverse_dict_and_list(
+        __pillar__, key, KeyError, delimiter)
+
+    if ret is KeyError:
+        raise KeyError("Pillar key not found: {0}".format(key))
+
+    if not isinstance(ret, dict):
+        raise ValueError("Pillar value in key {0} is not a dict".format(key))
+
+    return ret.keys()
+
+
+def file_exists(path, saltenv=None):
+    '''
+    .. versionadded:: Boron
+
+    This is a master-only function. Calling from the minion is not supported.
+
+    Use the given path and search relative to the pillar environments to see if
+    a file exists at that path.
+
+    If the ``saltenv`` argument is given, restrict search to that environment
+    only.
+
+    Will only work with ``pillar_roots``, not external pillars.
+
+    Returns True if the file is found, and False otherwise.
+
+    path
+        The path to the file in question. Will be treated as a relative path
+
+    saltenv
+        Optional argument to restrict the search to a specific saltenv
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' pillar.file_exists foo/bar.sls
+    '''
+    pillar_roots = __opts__.get('pillar_roots')
+    if not pillar_roots:
+        raise CommandExecutionError('No pillar_roots found. Are you running '
+                                    'this on the master?')
+
+    if saltenv:
+        if saltenv in pillar_roots:
+            pillar_roots = {saltenv: pillar_roots[saltenv]}
+        else:
+            return False
+
+    for env in pillar_roots:
+        for pillar_dir in pillar_roots[env]:
+            full_path = os.path.join(pillar_dir, path)
+            if __salt__['file.file_exists'](full_path):
+                return True
+
+    return False

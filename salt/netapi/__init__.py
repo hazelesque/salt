@@ -38,9 +38,13 @@ class NetapiClient(object):
         Note, this will return an invalid success if the master crashed or was
         not shut down cleanly.
         '''
+        if self.opts['transport'] == 'tcp':
+            ipc_file = 'publish_pull.ipc'
+        else:
+            ipc_file = 'workers.ipc'
         return os.path.exists(os.path.join(
             self.opts['sock_dir'],
-            'workers.ipc'))
+            ipc_file))
 
     def run(self, low):
         '''
@@ -97,8 +101,6 @@ class NetapiClient(object):
         '''
         Run :ref:`execution modules <all-salt.modules>` against batches of minions
 
-        .. versionadded:: 0.8.4
-
         Wraps :py:meth:`salt.client.LocalClient.cmd_batch`
 
         :return: Returns the result from the exeuction module for each batch of
@@ -106,6 +108,17 @@ class NetapiClient(object):
         '''
         local = salt.client.get_local_client(mopts=self.opts)
         return local.cmd_batch(*args, **kwargs)
+
+    def local_subset(self, *args, **kwargs):
+        '''
+        Run :ref:`execution modules <all-salt.modules>` against subsets of minions
+
+        .. versionadded:: Boron
+
+        Wraps :py:meth:`salt.client.LocalClient.cmd_subset`
+        '''
+        local = salt.client.get_local_client(mopts=self.opts)
+        return local.cmd_subset(*args, **kwargs)
 
     def ssh(self, *args, **kwargs):
         '''
@@ -141,10 +154,6 @@ class NetapiClient(object):
         :return: Returns the result from the runner module
         '''
         kwargs['fun'] = fun
-        if 'kwargs' not in kwargs:
-            kwargs['kwargs'] = {}
-        if 'args' not in kwargs:
-            kwargs['args'] = []
         runner = salt.runner.RunnerClient(self.opts)
         return runner.cmd_sync(kwargs, timeout=timeout)
 
@@ -160,10 +169,6 @@ class NetapiClient(object):
         :return: event data and a job ID for the executed function.
         '''
         kwargs['fun'] = fun
-        if 'kwargs' not in kwargs:
-            kwargs['kwargs'] = {}
-        if 'args' not in kwargs:
-            kwargs['args'] = []
         runner = salt.runner.RunnerClient(self.opts)
         return runner.cmd_async(kwargs)
 

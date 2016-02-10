@@ -13,23 +13,32 @@ Full list of builtin state modules
     alias
     alternatives
     apache
+    apache_conf
     apache_module
-    apt
+    apache_site
+    aptpkg
     archive
     artifactory
     at
     augeas
     aws_sqs
+    beacon
+    bigip
     blockdev
     boto_asg
     boto_cfn
+    boto_cloudtrail
     boto_cloudwatch_alarm
+    boto_datapipeline
     boto_dynamodb
     boto_ec2
     boto_elasticache
     boto_elb
     boto_iam
     boto_iam_role
+    boto_iot
+    boto_kms
+    boto_lamda
     boto_lc
     boto_rds
     boto_route53
@@ -40,6 +49,8 @@ Full list of builtin state modules
     bower
     cabal
     chef
+    chocolatey
+    chronos_job
     cloud
     cmd
     composer
@@ -47,19 +58,31 @@ Full list of builtin state modules
     cyg
     ddns
     debconfmod
+    dellchassis
     disk
     dockerio
     dockerng
     drac
+    elasticsearch_index
+    elasticsearch_index_template
     environ
     eselect
+    etcd_mod
+    esxi
     event
     file
+    firewall
+    firewalld
     gem
     git
+    github
+    glance
     glusterfs
     gnomedesktop
+    gpg
     grafana
+    grafana_dashboard
+    grafana_datasource
     grains
     group
     hg
@@ -67,18 +90,22 @@ Full list of builtin state modules
     host
     htpasswd
     http
+    ifttt
     incron
     influxdb_database
     influxdb_user
+    infoblox
     ini_manage
     ipmi
     ipset
     iptables
     jboss7
+    jenkins
     keyboard
     keystone
     kmod
     layman
+    ldap
     libvirt
     linux_acl
     locale
@@ -87,6 +114,7 @@ Full list of builtin state modules
     lvs_service
     lxc
     makeconf
+    marathon_app
     mdadm
     memcached
     modjk
@@ -105,6 +133,8 @@ Full list of builtin state modules
     npm
     ntp
     openstack_config
+    openvswitch_bridge
+    openvswitch_port
     pagerduty
     pagerduty_escalation_policy
     pagerduty_schedule
@@ -113,14 +143,20 @@ Full list of builtin state modules
     pecl
     pip_state
     pkg
+    pkgbuild
     pkgng
     pkgrepo
     portage_config
     ports
+    postgres_cluster
     postgres_database
     postgres_extension
     postgres_group
+    postgres_initdb
+    postgres_language
+    postgres_privileges
     postgres_schema
+    postgres_tablespace
     postgres_user
     powerpath
     process
@@ -137,42 +173,61 @@ Full list of builtin state modules
     rdp
     redismod
     reg
+    rsync
     rvm
+    salt_proxy
     saltmod
     schedule
     selinux
     serverdensity_device
     service
     slack
+    smartos
     smtp
+    splunk
     splunk_search
+    sqlite3
     ssh_auth
     ssh_known_hosts
     stateconf
     status
+    stormpath_account
     supervisord
     svn
     sysctl
     syslog_ng
     sysrc
+    telemetry_alert
     test
     timezone
+    tls
     tomcat
+    trafficserver
     tuned
     uptime
     user
     vbox_guest
+    victorops
+    virt
     virtualenv_mod
     win_dacl
     win_dns_client
     win_firewall
     win_network
     win_path
+    win_powercfg
     win_servermanager
     win_system
     win_update
     winrepo
     x509
     xmpp
+    zabbix_host
+    zabbix_hostgroup
+    zabbix_user
+    zabbix_usergroup
     zcbuildout
+    zenoss
     zk_concurrency
+    zfs
+    zpool

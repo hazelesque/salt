@@ -10,6 +10,7 @@ import os
 import re
 
 # Import salt libs
+import salt.ext.six as six
 import salt.utils
 from salt.ext.six import string_types
 from salt.exceptions import CommandExecutionError
@@ -30,7 +31,7 @@ def __virtual__():
     Only run on Linux systems
     '''
     if __grains__['kernel'] != 'Linux':
-        return False
+        return (False, 'The linux_sysctl execution module cannot be loaded: only available on Linux systems.')
     return __virtualname__
 
 
@@ -129,7 +130,8 @@ def assign(name, value):
         salt '*' sysctl.assign net.ipv4.ip_forward 1
     '''
     value = str(value)
-    sysctl_file = '/proc/sys/{0}'.format(name.translate(string.maketrans('./', '/.')))
+    trantab = ''.maketrans('./', '/.') if six.PY3 else string.maketrans('./', '/.')
+    sysctl_file = '/proc/sys/{0}'.format(name.translate(trantab))
     if not os.path.exists(sysctl_file):
         raise CommandExecutionError('sysctl {0} does not exist'.format(name))
 

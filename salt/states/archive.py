@@ -15,8 +15,9 @@ from contextlib import closing
 # Import 3rd-party libs
 import salt.ext.six as six
 
-# remove after archive_user deprecation.
-from salt.utils import warn_until
+# # Use salt.utils.fopen
+import salt.utils
+
 
 log = logging.getLogger(__name__)
 
@@ -25,11 +26,41 @@ __virtualname__ = 'archive'
 
 def __virtual__():
     '''
-    Only load if the npm module is available in __salt__
+    Only load if the archive module is available in __salt__
     '''
-    return __virtualname__ \
-        if [x for x in __salt__ if x.startswith('archive.')] \
-        else False
+    if 'archive.unzip' in __salt__ and 'archive.unrar' in __salt__:
+        return __virtualname__
+    else:
+        return False
+
+
+def updateChecksum(fname, target, checksum):
+    lines = []
+    compare_string = '{0}:{1}'.format(target, checksum)
+    if os.path.exists(fname):
+        with salt.utils.fopen(fname, 'r') as f:
+            lines = f.readlines()
+    with salt.utils.fopen(fname, 'w') as f:
+        f.write('{0}:{1}\n'.format(target, checksum))
+        for line in lines:
+            if line.startswith(target):
+                continue
+            f.write(line)
+
+
+def compareChecksum(fname, target, checksum):
+    if os.path.exists(fname):
+        compare_string = '{0}:{1}'.format(target, checksum)
+        with salt.utils.fopen(fname, 'r') as f:
+            while True:
+                current_line = f.readline()
+                if not current_line:
+                    break
+                if current_line.endswith('\n'):
+                    current_line = current_line[:-1]
+                if compare_string == current_line:
+                    return True
+    return False
 
 
 def extracted(name,
@@ -39,9 +70,12 @@ def extracted(name,
               user=None,
               group=None,
               tar_options=None,
+              zip_options=None,
               source_hash=None,
               if_missing=None,
-              keep=False):
+              keep=False,
+              trim_output=False,
+              source_hash_update=None):
     '''
     .. versionadded:: 2014.1.0
 
@@ -83,6 +117,21 @@ def extracted(name,
             - group: root
             - if_missing: /opt/graylog2-server-0.9.6p1/
 
+    Example, tar with flag for lmza compression and update based if source_hash differs from what was
+    previously extracted:
+
+    .. code-block:: yaml
+
+        graylog2-server:
+          archive.extracted:
+            - name: /opt/
+            - source: https://github.com/downloads/Graylog2/graylog2-server/graylog2-server-0.9.6p1.tar.lzma
+            - source_hash: md5=499ae16dcae71eeb7c3a30c75ea7a1a6
+            - source_hash_update: true
+            - tar_options: J
+            - archive_format: tar
+            - if_missing: /opt/graylog2-server-0.9.6p1/
+
     name
         Directory name where to extract the archive
 
@@ -93,20 +142,23 @@ def extracted(name,
         Hash of source file, or file with list of hash-to-file mappings.
         It uses the same syntax as the file.managed source_hash argument.
 
+    source_hash_update
+        Set this to true if archive should be extracted if source_hash has
+        changed. This would extract regardless of the `if_missing`
+        parameter.
+
     archive_format
         tar, zip or rar
-
-    archive_user
-        The user to own each extracted file.
-
-        .. deprecated:: 2014.7.2
-            replaced by standardized `user` parameter.
 
     user
         The user to own each extracted file.
 
+        .. versionadded:: 2015.8.0
+
     group
         The group to own each extracted file.
+
+        .. versionadded:: 2015.8.0
 
     if_missing
         Some archives, such as tar, extract themselves in a subfolder.
@@ -125,8 +177,20 @@ def extracted(name,
         then the Python tarfile module is used. The tarfile module supports gzip
         and bz2 in Python 2.
 
+    zip_options
+        Optional when using ``zip`` archives, ignored when usign other archives
+        files. This is mostly used to overwrite exsiting files with ``o``.
+        This options are only used when ``unzip`` binary is used.
+
+        .. versionadded:: 2016.3.1
+
     keep
         Keep the archive in the minion's cache
+
+    trim_output
+        The number of files we should output on success before the rest are trimmed, if this is
+        set to True then it will default to 100
+
     '''
     ret = {'name': name, 'result': None, 'changes': {}, 'comment': ''}
     valid_archives = ('tar', 'rar', 'zip')
@@ -137,22 +201,23 @@ def extracted(name,
             archive_format, ','.join(valid_archives))
         return ret
 
-    # remove this whole block after formal deprecation.
-    if archive_user is not None:
-        warn_until(
-          'Boron',
-          'Passing \'archive_user\' is deprecated.'
-          'Pass \'user\' instead.'
-        )
-        if user is None:
-            user = archive_user
-
     if not name.endswith('/'):
         name += '/'
 
     if if_missing is None:
         if_missing = name
-    if (
+    if source_hash and source_hash_update:
+        hash = source_hash.split("=")
+        source_file = '{0}.{1}'.format(os.path.basename(source), hash[0])
+        hash_fname = os.path.join(__opts__['cachedir'],
+                            'files',
+                            __env__,
+                            source_file)
+        if compareChecksum(hash_fname, name, hash[1]):
+            ret['result'] = True
+            ret['comment'] = 'Hash {0} has not changed'.format(hash[1])
+            return ret
+    elif (
         __salt__['file.directory_exists'](if_missing)
         or __salt__['file.file_exists'](if_missing)
     ):
@@ -206,18 +271,17 @@ def extracted(name,
 
     __salt__['file.makedirs'](name, user=user, group=group)
 
-    if archive_format in ('zip', 'rar'):
-        log.debug('Extract {0} in {1}'.format(filename, name))
-        files = __salt__['archive.un{0}'.format(archive_format)](filename,
-                                                                 name)
+    log.debug('Extract {0} in {1}'.format(filename, name))
+    if archive_format == 'zip':
+        files = __salt__['archive.unzip'](filename, name, options=zip_options, trim_output=trim_output)
+    elif archive_format == 'rar':
+        files = __salt__['archive.unrar'](filename, name, trim_output=trim_output)
     else:
         if tar_options is None:
             with closing(tarfile.open(filename, 'r')) as tar:
                 files = tar.getnames()
                 tar.extractall(name)
         else:
-            log.debug('Untar {0} in {1}'.format(filename, name))
-
             tar_opts = tar_options.split(' ')
 
             tar_cmd = ['tar']
@@ -270,6 +334,9 @@ def extracted(name,
         ret['comment'] = '{0} extracted in {1}'.format(source, name)
         if not keep:
             os.unlink(filename)
+        if source_hash and source_hash_update:
+            updateChecksum(hash_fname, name, hash[1])
+
     else:
         __salt__['file.remove'](if_missing)
         ret['result'] = False

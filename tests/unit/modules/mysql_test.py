@@ -149,9 +149,9 @@ class MySQLTestCase(TestCase):
         self._test_call(
             mysql.db_exists,
             {'sql': 'SHOW DATABASES LIKE %(dbname)s;',
-             'sql_args': {'dbname': r'''test\%\_`'" db'''}
+             'sql_args': {'dbname': r'''test%_`" db'''}
              },
-            'test%_`\'" db'
+            'test%_`" db'
         )
 
     def test_db_create(self):
@@ -198,12 +198,44 @@ class MySQLTestCase(TestCase):
                        'testuser'
         )
 
-    @skipIf(True, 'TODO: Mock up user_grants()')
-    def test_grant_exists(self):
+    def test_grant_exists_true(self):
         '''
-        Test to ensure a basic query for grants works in the mysql exec module
+        Test to ensure that we can find a grant that exists
         '''
-        self._test_call(mysql.grant_exists, '', 'SELECT,INSERT,UPDATE', 'database.*', 'frank')
+        mock_grants = [
+            "GRANT USAGE ON *.* TO 'testuser'@'%'",
+            "GRANT SELECT, INSERT, UPDATE ON `testdb`.`testtableone` TO 'testuser'@'%'",
+            "GRANT SELECT ON `testdb`.`testtabletwo` TO 'testuer'@'%'",
+            "GRANT SELECT ON `testdb`.`testtablethree` TO 'testuser'@'%'",
+        ]
+        mock = MagicMock(return_value=mock_grants)
+        with patch.object(mysql, 'user_grants', return_value=mock_grants) as mock_user_grants:
+            ret = mysql.grant_exists(
+                'SELECT, INSERT, UPDATE',
+                'testdb.testtableone',
+                'testuser',
+                '%'
+            )
+            self.assertEqual(ret, True)
+
+    def test_grant_exists_false(self):
+        '''
+        Test to ensure that we don't find a grant that doesn't exist
+        '''
+        mock_grants = [
+            "GRANT USAGE ON *.* TO 'testuser'@'%'",
+            "GRANT SELECT, INSERT, UPDATE ON `testdb`.`testtableone` TO 'testuser'@'%'",
+            "GRANT SELECT ON `testdb`.`testtablethree` TO 'testuser'@'%'",
+        ]
+        mock = MagicMock(return_value=mock_grants)
+        with patch.object(mysql, 'user_grants', return_value=mock_grants) as mock_user_grants:
+            ret = mysql.grant_exists(
+                'SELECT',
+                'testdb.testtabletwo',
+                'testuser',
+                '%'
+            )
+            self.assertEqual(ret, False)
 
     @skipIf(True, 'TODO: Mock up user_grants()')
     def test_grant_add(self):
@@ -250,10 +282,10 @@ class MySQLTestCase(TestCase):
         with patch.dict(mysql.__salt__, {'config.option': MagicMock()}):
             function(*args, **kwargs)
             if isinstance(expected_sql, dict):
-                calls = (call().cursor().execute('{0}'.format(expected_sql['sql']), expected_sql['sql_args']))
+                calls = call().cursor().execute('{0}'.format(expected_sql['sql']), expected_sql['sql_args'])
             else:
-                calls = (call().cursor().execute('{0}'.format(expected_sql)))
-            connect_mock.assert_has_calls(calls)
+                calls = call().cursor().execute('{0}'.format(expected_sql))
+            connect_mock.assert_has_calls((calls,), True)
 
 
 if __name__ == '__main__':

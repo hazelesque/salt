@@ -3,16 +3,21 @@
 Beacon to monitor disk usage.
 
 .. versionadded:: 2015.5.0
+
+:depends: python-psutil
 '''
 
 # Import Python libs
 from __future__ import absolute_import
 import logging
-import psutil
 import re
 
-# Import Salt libs
-import salt.utils
+# Import Third Party Libs
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +25,7 @@ __virtualname__ = 'diskusage'
 
 
 def __virtual__():
-    if salt.utils.is_windows():
+    if HAS_PSUTIL is False:
         return False
     else:
         return __virtualname__
@@ -50,6 +55,17 @@ def beacon(config):
           diskusage:
             - /: 63%
             - /mnt/nfs: 50%
+
+    Windows drives must be quoted to avoid yaml syntax errors
+
+    .. code-block:: yaml
+
+        beacons:
+          diskusage:
+            -  interval: 120
+            - 'c:\': 90%
+            - 'd:\': 50%
+
     '''
     ret = []
     for diskusage in config:
@@ -60,6 +76,7 @@ def beacon(config):
         except OSError:
             # Ensure a valid mount point
             log.error('{0} is not a valid mount point, skipping.'.format(mount))
+            continue
 
         current_usage = _current_usage.percent
         monitor_usage = diskusage[mount]

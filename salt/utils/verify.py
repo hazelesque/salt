@@ -154,12 +154,12 @@ def verify_files(files, user):
     try:
         pwnam = pwd.getpwnam(user)
         uid = pwnam[2]
-
     except KeyError:
         err = ('Failed to prepare the Salt environment for user '
                '{0}. The user is not available.\n').format(user)
         sys.stderr.write(err)
         sys.exit(salt.defaults.exitcodes.EX_NOUSER)
+
     for fn_ in files:
         dirname = os.path.dirname(fn_)
         try:
@@ -171,6 +171,14 @@ def verify_files(files, user):
             if not os.path.isfile(fn_):
                 with salt.utils.fopen(fn_, 'w+') as fp_:
                     fp_.write('')
+
+        except IOError as err:
+            if err.errno != errno.EACCES:
+                raise
+            msg = 'No permissions to access "{0}", are you running as the correct user?\n'
+            sys.stderr.write(msg.format(fn_))
+            sys.exit(err.errno)
+
         except OSError as err:
             msg = 'Failed to create path "{0}" - {1}\n'
             sys.stderr.write(msg.format(fn_, err))
@@ -502,3 +510,11 @@ def safe_py_code(code):
         if code.count(bad):
             return False
     return True
+
+
+def verify_log(opts):
+    '''
+    If an insecre logging configuration is found, show a warning
+    '''
+    if opts.get('log_level') in ('garbage', 'trace', 'debug'):
+        log.warn('Insecure logging configuration detected! Sensitive data may be logged.')

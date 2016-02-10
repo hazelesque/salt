@@ -170,7 +170,7 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         self.assertNotIn('minion', data.replace('sub_minion', 'stub'))
         data = self.run_salt('-G "planets:pluto" test.ping')
         expect = None
-        if self.master_opts['transport'] == 'zeromq':
+        if self.master_opts['transport'] in ('zeromq', 'tcp'):
             expect = (
                 'No minions matched the target. '
                 'No command was sent, no jid was '
@@ -345,7 +345,7 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
             )
             self.assertEqual(ret[2], 2)
         finally:
-            os.chdir(old_cwd)
+            self.chdir(old_cwd)
             if os.path.isdir(config_dir):
                 shutil.rmtree(config_dir)
 

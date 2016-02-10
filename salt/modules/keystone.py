@@ -51,6 +51,7 @@ Module for handling openstack keystone calls.
 
 # Import Python libs
 from __future__ import absolute_import
+import logging
 
 # Import Salt Libs
 import salt.ext.six as six
@@ -66,6 +67,8 @@ try:
 except ImportError:
     pass
 
+log = logging.getLogger(__name__)
+
 
 def __virtual__():
     '''
@@ -74,16 +77,20 @@ def __virtual__():
     '''
     if HAS_KEYSTONE:
         return 'keystone'
-    return False
+    return (False, 'keystone execution module cannot be loaded: keystoneclient python library not available.')
 
 __opts__ = {}
 
 
 def auth(profile=None, **connection_args):
     '''
-    Set up keystone credentials
+    Set up keystone credentials. Only intended to be used within Keystone-enabled modules.
 
-    Only intended to be used within Keystone-enabled modules
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' keystone.auth
     '''
 
     if profile:
@@ -337,7 +344,9 @@ def endpoint_delete(service, profile=None, **connection_args):
 
 def role_create(name, profile=None, **connection_args):
     '''
-    Create named role
+    Create a named role.
+
+    CLI Example:
 
     .. code-block:: bash
 
@@ -701,7 +710,13 @@ def user_get(user_id=None, name=None, profile=None, **connection_args):
                 break
     if not user_id:
         return {'Error': 'Unable to resolve user id'}
-    user = kstone.users.get(user_id)
+    try:
+        user = kstone.users.get(user_id)
+    except keystoneclient.exceptions.NotFound:
+        msg = 'Could not find user \'{0}\''.format(user_id)
+        log.error(msg)
+        return {'Error': msg}
+
     ret[user.name] = {'id': user.id,
                       'name': user.name,
                       'email': user.email,

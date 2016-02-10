@@ -7,16 +7,19 @@ from __future__ import absolute_import
 
 import tornado.ioloop
 import tornado.concurrent
+# attempt to use zmq-- if we have it otherwise fallback to tornado loop
 try:
     import zmq.eventloop.ioloop
     # support pyzmq 13.0.x, TODO: remove once we force people to 14.0.x
     if not hasattr(zmq.eventloop.ioloop, 'ZMQIOLoop'):
         zmq.eventloop.ioloop.ZMQIOLoop = zmq.eventloop.ioloop.IOLoop
+    LOOP_CLASS = zmq.eventloop.ioloop.ZMQIOLoop
+    HAS_ZMQ = True
 except ImportError:
-    pass  # salt-ssh doesn't dep zmq
+    LOOP_CLASS = tornado.ioloop.IOLoop
+    HAS_ZMQ = False
 
 import contextlib
-import weakref
 
 
 @contextlib.contextmanager
@@ -46,17 +49,11 @@ class SyncWrapper(object):
     # the sync wrapper will automatically wait on the future
     ret = sync.async_method()
     '''
-    loop_map = weakref.WeakKeyDictionary()  # keep a mapping of parent io_loop -> sync_loop
-
     def __init__(self, method, args=tuple(), kwargs=None):
         if kwargs is None:
             kwargs = {}
 
-        parent_io_loop = tornado.ioloop.IOLoop.current()
-        if parent_io_loop not in SyncWrapper.loop_map:
-            SyncWrapper.loop_map[parent_io_loop] = zmq.eventloop.ioloop.ZMQIOLoop()
-
-        self.io_loop = SyncWrapper.loop_map[parent_io_loop]
+        self.io_loop = LOOP_CLASS()
         kwargs['io_loop'] = self.io_loop
 
         with current_ioloop(self.io_loop):
@@ -85,3 +82,20 @@ class SyncWrapper(object):
         self.io_loop.add_future(future, lambda future: self.io_loop.stop())
         self.io_loop.start()
         return future.result()
+
+    def __del__(self):
+        '''
+        On deletion of the async wrapper, make sure to clean up the async stuff
+        '''
+        if hasattr(self, 'async'):
+            if hasattr(self.async, 'close'):
+                # Certain things such as streams should be closed before
+                # their associated io_loop is closed to allow for proper
+                # cleanup.
+                self.async.close()
+            self.io_loop.close()
+            # Other things should be deallocated after the io_loop closes.
+            # See Issue #26889.
+            del self.async
+        else:
+            self.io_loop.close()

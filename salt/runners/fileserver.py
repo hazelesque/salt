@@ -313,9 +313,9 @@ def clear_lock(backend=None, remote=None):
         Only clear the update lock for the specified backend(s).
 
     remote
-        If not None, then any remotes which contain the passed string will have
-        their lock cleared. For example, a ``remote`` value of **github** will
-        remove the lock from all github.com remotes.
+        If specified, then any remotes which contain the passed string will
+        have their lock cleared. For example, a ``remote`` value of **github**
+        will remove the lock from all github.com remotes.
 
     CLI Example:
 
@@ -349,7 +349,7 @@ def lock(backend=None, remote=None):
     .. note::
 
         This will only operate on enabled backends (those configured in
-        :master_conf:`fileserver_backend`).
+        :conf_master:`fileserver_backend`).
 
     backend
         Only set the update lock for the specified backend(s).

@@ -2,7 +2,7 @@
 '''
 Manage X509 certificates
 
-.. versionadded:: Beryllium
+.. versionadded:: 2015.8.0
 
 '''
 
@@ -12,7 +12,6 @@ import os
 import logging
 import hashlib
 import glob
-import M2Crypto
 import random
 import ctypes
 import tempfile
@@ -28,6 +27,15 @@ import salt.ext.six as six
 from salt.utils.odict import OrderedDict
 from salt.ext.six.moves import range  # pylint: disable=import-error,redefined-builtin
 from salt.state import STATE_INTERNAL_KEYWORDS as _STATE_INTERNAL_KEYWORDS
+
+# Import 3rd Party Libs
+try:
+    import M2Crypto
+    HAS_M2 = True
+except ImportError:
+    HAS_M2 = False
+
+__virtualname__ = 'x509'
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +60,16 @@ EXT_NAME_MAPPINGS = OrderedDict([
                     ])
 
 CERT_DEFAULTS = {'days_valid': 365, 'version': 3, 'serial_bits': 64, 'algorithm': 'sha256'}
+
+
+def __virtual__():
+    '''
+    only load this module if m2crypto is available
+    '''
+    if HAS_M2:
+        return __virtualname__
+    else:
+        return (False, 'Could not load x509 module, m2crypto unavailable')
 
 
 class _Ctx(ctypes.Structure):
@@ -121,7 +139,7 @@ def _parse_openssl_req(csr_filename):
     '''
     cmd = ('openssl req -text -noout -in {0}'.format(csr_filename))
 
-    output = __salt__['cmd.run_stderr'](cmd)
+    output = __salt__['cmd.run_stdout'](cmd)
 
     output = re.sub(r': rsaEncryption', ':', output)
     output = re.sub(r'[0-9a-f]{2}:', '', output)
@@ -141,11 +159,12 @@ def _get_csr_extensions(csr):
     csrtempfile.flush()
     csryaml = _parse_openssl_req(csrtempfile.name)
     csrtempfile.close()
-    csrexts = csryaml['Certificate Request']['Data']['Requested Extensions']
+    if csryaml and 'Requested Extensions' in csryaml['Certificate Request']['Data']:
+        csrexts = csryaml['Certificate Request']['Data']['Requested Extensions']
 
-    for short_name, long_name in six.iteritems(EXT_NAME_MAPPINGS):
-        if long_name in csrexts:
-            ret[short_name] = csrexts[long_name]
+        for short_name, long_name in six.iteritems(EXT_NAME_MAPPINGS):
+            if long_name in csrexts:
+                ret[short_name] = csrexts[long_name]
 
     return ret
 
@@ -158,7 +177,7 @@ def _parse_openssl_crl(crl_filename):
     '''
     cmd = ('openssl crl -text -noout -in {0}'.format(crl_filename))
 
-    output = __salt__['cmd.run_stderr'](cmd)
+    output = __salt__['cmd.run_stdout'](cmd)
 
     crl = {}
     for line in output.split('\n'):
@@ -238,7 +257,7 @@ def _dec2hex(decval):
     '''
     Converts decimal values to nicely formatted hex strings
     '''
-    return _pretty_hex('{:X}'.format(decval))
+    return _pretty_hex('{0:X}'.format(decval))
 
 
 def _text_or_file(input_):
@@ -272,24 +291,12 @@ def _get_certificate_obj(cert):
     '''
     Returns a certificate object based on PEM text.
     '''
+    if isinstance(cert, M2Crypto.X509.X509):
+        return cert
+
     text = _text_or_file(cert)
     text = get_pem_entry(text, pem_type='CERTIFICATE')
     return M2Crypto.X509.load_cert_string(text)
-
-
-def _get_public_key_obj(public_key):
-    '''
-    Returns a public key object based on PEM text.
-    '''
-    public_key = _text_or_file(public_key)
-    public_key = get_pem_entry(public_key)
-    public_key = get_public_key(public_key)
-    bio = M2Crypto.BIO.MemoryBuffer()
-    bio.write(public_key)
-    rsapubkey = M2Crypto.RSA.load_pub_key_bio(bio)
-    evppubkey = M2Crypto.EVP.PKey()
-    evppubkey.assign_rsa(rsapubkey)
-    return evppubkey
 
 
 def _get_private_key_obj(private_key):
@@ -412,13 +419,10 @@ def read_certificate(certificate):
 
         salt '*' x509.read_certificate /etc/pki/mycert.crt
     '''
-    if isinstance(certificate, M2Crypto.X509.X509):
-        cert = certificate
-    else:
-        cert = _get_certificate_obj(certificate)
+    cert = _get_certificate_obj(certificate)
 
     ret = {
-        # X509 Verison 3 has a value of 2 in the field.
+        # X509 Version 3 has a value of 2 in the field.
         # Version 2 has a value of 1.
         # https://tools.ietf.org/html/rfc5280#section-4.1.2.1
         'Version': cert.get_version()+1,
@@ -434,7 +438,7 @@ def read_certificate(certificate):
         'Issuer Hash': _dec2hex(cert.get_issuer().as_hash()),
         'Not Before': cert.get_not_before().get_datetime().strftime('%Y-%m-%d %H:%M:%S'),
         'Not After': cert.get_not_after().get_datetime().strftime('%Y-%m-%d %H:%M:%S'),
-        'Public Key': get_public_key(cert.as_pem())
+        'Public Key': get_public_key(cert)
     }
 
     exts = OrderedDict()
@@ -494,7 +498,7 @@ def read_csr(csr):
     '''
     csr = _get_request_obj(csr)
     ret = {
-           # X509 Verison 3 has a value of 2 in the field.
+           # X509 Version 3 has a value of 2 in the field.
            # Version 2 has a value of 1.
            # https://tools.ietf.org/html/rfc5280#section-4.1.2.1
            'Version': csr.get_version()+1,
@@ -535,7 +539,7 @@ def read_crl(crl):
     return crlparsed
 
 
-def get_public_key(key):
+def get_public_key(key, asObj=False):
     '''
     Returns a string containing the public key in PEM format.
 
@@ -549,12 +553,20 @@ def get_public_key(key):
 
         salt '*' x509.get_public_key /etc/pki/mycert.cer
     '''
-    text = _text_or_file(key)
 
-    text = get_pem_entry(text)
+    if isinstance(key, M2Crypto.X509.X509):
+        rsa = key.get_pubkey().get_rsa()
+        text = ''
+    else:
+        text = _text_or_file(key)
+        text = get_pem_entry(text)
 
     if text.startswith('-----BEGIN PUBLIC KEY-----'):
-        return text
+        if not asObj:
+            return text
+        bio = M2Crypto.BIO.MemoryBuffer()
+        bio.write(text)
+        rsa = M2Crypto.RSA.load_pub_key_bio(bio)
 
     bio = M2Crypto.BIO.MemoryBuffer()
     if text.startswith('-----BEGIN CERTIFICATE-----'):
@@ -566,6 +578,11 @@ def get_public_key(key):
     if (text.startswith('-----BEGIN PRIVATE KEY-----') or
             text.startswith('-----BEGIN RSA PRIVATE KEY-----')):
         rsa = M2Crypto.RSA.load_key_string(text)
+
+    if asObj:
+        evppubkey = M2Crypto.EVP.PKey()
+        evppubkey.assign_rsa(rsa)
+        return evppubkey
 
     rsa.save_pub_key_bio(bio)
     return bio.read_all()
@@ -675,7 +692,7 @@ def create_crl(path=None, text=False, signing_private_key=None,
         the serial number to revoke, or ``certificate`` with either the PEM encoded text of
         the certificate, or a path ot the certificate to revoke.
 
-        The dict can optionally contain the ``revocation_date`` key. If this key is ommitted
+        The dict can optionally contain the ``revocation_date`` key. If this key is omitted
         the revocation date will be set to now. If should be a string in the format "%Y-%m-%d %H:%M:%S".
 
         The dict can also optionally contain the ``not_after`` key. This is redundant if the
@@ -935,7 +952,7 @@ def create_certificate(path=None, text=False, ca_server=None, **kwargs):
 
     extensions:
         The following arguments set X509v3 Extension values. If the value starts with ``critical ``,
-        the extension will be marked as critical
+        the extension will be marked as critical.
 
         Some special extensions are ``subjectKeyIdentifier`` and ``authorityKeyIdentifier``.
 
@@ -1002,7 +1019,7 @@ def create_certificate(path=None, text=False, ca_server=None, **kwargs):
         version value, so ``version=3`` sets the certificate version field to 0x2.
 
     serial_number:
-        The serial number to assign to this certificate. If ommited a random serial number of size
+        The serial number to assign to this certificate. If omitted a random serial number of size
         ``serial_bits`` is generated.
 
     serial_bits:
@@ -1098,9 +1115,8 @@ def create_certificate(path=None, text=False, ca_server=None, **kwargs):
             kwargs[prop] = default
 
     cert = M2Crypto.X509.X509()
-    subject = cert.get_subject()
 
-    # X509 Verison 3 has a value of 2 in the field.
+    # X509 Version 3 has a value of 2 in the field.
     # Version 2 has a value of 1.
     # https://tools.ietf.org/html/rfc5280#section-4.1.2.1
     cert.set_version(kwargs['version'] - 1)
@@ -1126,10 +1142,12 @@ def create_certificate(path=None, text=False, ca_server=None, **kwargs):
     if 'csr' in kwargs:
         kwargs['public_key'] = kwargs['csr']
         csr = _get_request_obj(kwargs['csr'])
-        subject = csr.get_subject()
+        cert.set_subject(csr.get_subject())
         csrexts = read_csr(kwargs['csr'])['X509v3 Extensions']
 
-    cert.set_pubkey(_get_public_key_obj(kwargs['public_key']))
+    cert.set_pubkey(get_public_key(kwargs['public_key'], asObj=True))
+
+    subject = cert.get_subject()
 
     for entry, num in six.iteritems(subject.nid):                  # pylint: disable=unused-variable
         if entry in kwargs:
@@ -1172,14 +1190,14 @@ def create_certificate(path=None, text=False, ca_server=None, **kwargs):
         cert_props['Issuer Public Key'] = get_public_key(kwargs['signing_private_key'])
         return cert_props
 
-    if not verify_private_key(kwargs['signing_private_key'], signing_cert.as_pem()):
+    if not verify_private_key(kwargs['signing_private_key'], signing_cert):
         raise salt.exceptions.SaltInvocationError('signing_private_key: {0}'
                 'does no match signing_cert: {1}'.format(kwargs['signing_private_key'],
                                                          kwargs['signing_cert']))
 
     cert.sign(_get_private_key_obj(kwargs['signing_private_key']), kwargs['algorithm'])
 
-    if not verify_signature(cert.as_pem(), signing_pub_key=signing_cert.as_pem()):
+    if not verify_signature(cert, signing_pub_key=signing_cert):
         raise salt.exceptions.SaltInvocationError('failed to verify certificate signature')
 
     if 'copypath' in kwargs:
@@ -1204,7 +1222,7 @@ def create_csr(path=None, text=False, **kwargs):
         If ``True``, return the PEM text without writing to a file. Default ``False``.
 
     kwargs:
-        The subject, extension and verison arguments from
+        The subject, extension and version arguments from
         :mod:`x509.create_certificate <salt.modules.x509.create_certificate>` can be used.
 
     CLI Example:
@@ -1225,7 +1243,7 @@ def create_csr(path=None, text=False, **kwargs):
 
     if 'public_key' not in kwargs:
         raise salt.exceptions.SaltInvocationError('public_key is required')
-    csr.set_pubkey(_get_public_key_obj(kwargs['public_key']))
+    csr.set_pubkey(get_public_key(kwargs['public_key'], asObj=True))
 
     for entry, num in six.iteritems(subject.nid):                  # pylint: disable=unused-variable
         if entry in kwargs:
@@ -1300,7 +1318,7 @@ def verify_signature(certificate, signing_pub_key=None):
     cert = _get_certificate_obj(certificate)
 
     if signing_pub_key:
-        signing_pub_key = _get_public_key_obj(signing_pub_key)
+        signing_pub_key = get_public_key(signing_pub_key, asObj=True)
 
     return bool(cert.verify(pkey=signing_pub_key) == 1)
 
@@ -1337,7 +1355,7 @@ def verify_crl(crl, cert):
 
     cmd = ('openssl crl -noout -in {0} -CAfile {1}'.format(crltempfile.name, certtempfile.name))
 
-    output = __salt__['cmd.run_stderr'](cmd)
+    output = __salt__['cmd.run_stdout'](cmd)
 
     crltempfile.close()
     certtempfile.close()

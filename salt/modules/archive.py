@@ -7,6 +7,7 @@ A module to wrap (non-Windows) archive calls
 from __future__ import absolute_import
 import os
 import contextlib  # For < 2.7 compat
+import logging
 
 # Import salt libs
 from salt.exceptions import SaltInvocationError, CommandExecutionError
@@ -28,6 +29,8 @@ try:
 except ImportError:
     pass
 
+log = logging.getLogger(__name__)
+
 
 def __virtual__():
     if salt.utils.is_windows():
@@ -35,7 +38,7 @@ def __virtual__():
     commands = ('tar', 'gzip', 'gunzip', 'zip', 'unzip', 'rar', 'unrar')
     # If none of the above commands are in $PATH this module is a no-go
     if not any(salt.utils.which(cmd) for cmd in commands):
-        return False
+        return (False, 'The archive module could not be loaded: unable to find commands tar,gzip,gunzip,zip,unzip,rar,unrar')
     return True
 
 
@@ -57,7 +60,7 @@ def tar(options, tarfile, sources=None, dest=None,
     options
         Options to pass to the tar command
 
-        .. versionchanged:: Beryllium
+        .. versionchanged:: 2015.8.0
 
             The mandatory `-` prefixing has been removed.  An options string
             beginning with a `--long-option`, would have uncharacteristically
@@ -388,7 +391,7 @@ def zip_(zip_file, sources, template=None, cwd=None, runas=None):
 
 @salt.utils.decorators.which('unzip')
 def cmd_unzip(zip_file, dest, excludes=None,
-              template=None, options=None, runas=None):
+              template=None, options=None, runas=None, trim_output=False):
     '''
     .. versionadded:: 2015.5.0
         In versions 2014.7.x and earlier, this function was known as
@@ -417,20 +420,22 @@ def cmd_unzip(zip_file, dest, excludes=None,
 
             salt '*' archive.cmd_unzip template=jinja /tmp/zipfile.zip /tmp/{{grains.id}}/ excludes=file_1,file_2
 
-    options : None
-        Additional command-line options to pass to the ``unzip`` binary.
+    options
+        Optional when using ``zip`` archives, ignored when usign other archives
+        files. This is mostly used to overwrite exsiting files with ``o``.
+        This options are only used when ``unzip`` binary is used.
 
-        .. versionchanged:: Beryllium
-
-            The mandatory `-` prefixing has been removed.  An options string
-            beginning with a `--long-option`, would have uncharacteristically
-            needed its first `-` removed under the former scheme.
+        .. versionadded:: 2016.3.1
 
     runas : None
         Unpack the zip file as the specified user. Defaults to the user under
         which the minion is running.
 
         .. versionadded:: 2015.5.0
+
+    trim_output : False
+        The number of files we should output on success before the rest are trimmed, if this is
+        set to True then it will default to 100
 
     CLI Example:
 
@@ -445,20 +450,23 @@ def cmd_unzip(zip_file, dest, excludes=None,
 
     cmd = ['unzip']
     if options:
-        cmd.extend(options.split())
+        cmd.append('{0}'.format(options))
     cmd.extend(['{0}'.format(zip_file), '-d', '{0}'.format(dest)])
 
     if excludes is not None:
         cmd.append('-x')
         cmd.extend(excludes)
-    return __salt__['cmd.run'](cmd,
+    files = __salt__['cmd.run'](cmd,
                                template=template,
                                runas=runas,
                                python_shell=False).splitlines()
 
+    return _trim_files(files, trim_output)
+
 
 @salt.utils.decorators.depends('zipfile', fallback_function=cmd_unzip)
-def unzip(zip_file, dest, excludes=None, template=None, runas=None):
+def unzip(zip_file, dest, excludes=None,
+          options=None, template=None, runas=None, trim_output=False):
     '''
     Uses the ``zipfile`` Python module to unpack zip files
 
@@ -479,6 +487,12 @@ def unzip(zip_file, dest, excludes=None, template=None, runas=None):
         Comma-separated list of files not to unpack. Can also be passed in a
         Python list.
 
+    options
+        This options are only used when ``unzip`` binary is used. In this
+        function is ignored.
+
+        .. versionadded:: 2016.3.1
+
     template : None
         Can be set to 'jinja' or another supported template engine to render
         the command arguments before execution:
@@ -491,12 +505,18 @@ def unzip(zip_file, dest, excludes=None, template=None, runas=None):
         Unpack the zip file as the specified user. Defaults to the user under
         which the minion is running.
 
+    trim_output : False
+        The number of files we should output on success before the rest are trimmed, if this is
+        set to True then it will default to 100
+
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' archive.unzip /tmp/zipfile.zip /home/strongbad/ excludes=file_1,file_2
     '''
+    if options:
+        log.warn('Options \'{0}\' ignored, only works with unzip binary.'.format(options))
     if not excludes:
         excludes = []
     if runas:
@@ -555,7 +575,7 @@ def unzip(zip_file, dest, excludes=None, template=None, runas=None):
                 'Exception encountered unpacking zipfile: {0}'.format(exc)
             )
 
-    return cleaned_files
+    return _trim_files(cleaned_files, trim_output)
 
 
 @salt.utils.decorators.which('rar')
@@ -607,7 +627,7 @@ def rar(rarfile, sources, template=None, cwd=None, runas=None):
 
 
 @salt.utils.decorators.which_bin(('unrar', 'rar'))
-def unrar(rarfile, dest, excludes=None, template=None, runas=None):
+def unrar(rarfile, dest, excludes=None, template=None, runas=None, trim_output=False):
     '''
     Uses `rar for Linux`_ to unpack rar files
 
@@ -627,6 +647,10 @@ def unrar(rarfile, dest, excludes=None, template=None, runas=None):
 
             salt '*' archive.unrar template=jinja /tmp/rarfile.rar /tmp/{{grains.id}}/ excludes=file_1,file_2
 
+    trim_output : False
+        The number of files we should output on success before the rest are trimmed, if this is
+        set to True then it will default to 100
+
     CLI Example:
 
     .. code-block:: bash
@@ -643,10 +667,12 @@ def unrar(rarfile, dest, excludes=None, template=None, runas=None):
         for exclude in excludes:
             cmd.extend(['-x', '{0}'.format(exclude)])
     cmd.append('{0}'.format(dest))
-    return __salt__['cmd.run'](cmd,
+    files = __salt__['cmd.run'](cmd,
                                template=template,
                                runas=runas,
                                python_shell=False).splitlines()
+
+    return _trim_files(files, trim_output)
 
 
 def _render_filenames(filenames, zip_file, saltenv, template):
@@ -700,3 +726,16 @@ def _render_filenames(filenames, zip_file, saltenv, template):
     filenames = _render(filenames)
     zip_file = _render(zip_file)
     return (filenames, zip_file)
+
+
+def _trim_files(files, trim_output):
+    # Trim the file list for output
+    count = 100
+    if not isinstance(trim_output, bool):
+        count = trim_output
+
+    if not(isinstance(trim_output, bool) and trim_output is False) and len(files) > count:
+        files = files[:count]
+        files.append("List trimmed after {0} files.".format(count))
+
+    return files

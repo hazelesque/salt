@@ -313,7 +313,7 @@ def __virtual__():
     '''
     if salt.utils.is_windows() and HAS_WINDOWS_MODULES:
         return __virtualname__
-    return False
+    return (False, "Module win_dacl: module only works on Windows systems")
 
 
 def _get_dacl(path, objectType):
@@ -349,7 +349,7 @@ def get(path, objectType):
 
 
 def add_ace(path, objectType, user, permission, acetype, propagation):
-    '''
+    r'''
     add an ace to an object
 
     path:  path to the object (i.e. c:\\temp\\file, HKEY_LOCAL_MACHINE\\SOFTWARE\\KEY, etc)
@@ -424,7 +424,7 @@ def add_ace(path, objectType, user, permission, acetype, propagation):
 
 
 def rm_ace(path, objectType, user, permission, acetype, propagation):
-    '''
+    r'''
     remove an ace to an object
 
     path:  path to the object (i.e. c:\\temp\\file, HKEY_LOCAL_MACHINE\\SOFTWARE\\KEY, etc)

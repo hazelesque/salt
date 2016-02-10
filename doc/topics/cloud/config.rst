@@ -45,7 +45,7 @@ Cloud Configuration Syntax
 
 The data specific to interacting with public clouds is set up here.
 
-Cloud provider configuration syntax can live in several places. The first is in
+Cloud provider configuration settings can live in several places. The first is in
 ``/etc/salt/cloud``:
 
 .. code-block:: yaml
@@ -58,7 +58,7 @@ Cloud provider configuration syntax can live in several places. The first is in
         keyname: test
         securitygroup: quick-start
         private_key: /root/test.pem
-        provider: aws
+        driver: ec2
 
 Cloud provider configuration data can also be housed in ``/etc/salt/cloud.providers``
 or any file matching ``/etc/salt/cloud.providers.d/*.conf``. All files in any of these
@@ -76,7 +76,7 @@ Using the example configuration above:
       keyname: test
       securitygroup: quick-start
       private_key: /root/test.pem
-      provider: aws
+      driver: ec2
 
 .. note::
 
@@ -94,11 +94,11 @@ For example:
         keyname: test
         securitygroup: quick-start
         private_key: /root/test.pem
-        provider: aws
+        driver: ec2
 
       - user: example_user
         apikey: 123984bjjas87034
-        provider: rackspace
+        driver: rackspace
 
 
 However, using this configuration method requires a change with profile configuration blocks.
@@ -107,12 +107,12 @@ The provider alias needs to have the provider key value appended as in the follo
 .. code-block:: yaml
 
     rhel_aws_dev:
-      provider: production-config:aws
+      provider: production-config:ec2
       image: ami-e565ba8c
       size: t1.micro
 
     rhel_aws_prod:
-      provider: production-config:aws
+      provider: production-config:ec2
       image: ami-e565ba8c
       size: High-CPU Extra Large Instance
 
@@ -122,7 +122,7 @@ The provider alias needs to have the provider key value appended as in the follo
       size: 256 server
 
 Notice that because of the multiple entries, one has to be explicit about the provider alias and
-name, from the above example, ``production-config: aws``.
+name, from the above example, ``production-config: ec2``.
 
 This data interactions with the ``salt-cloud`` binary regarding its ``--list-location``,
 ``--list-images``, and ``--list-sizes`` which needs a cloud provider as an argument. The argument
@@ -158,7 +158,7 @@ minion. In your pillar file, you would use something like this:
           user: myuser
           api_key: apikey
           tenant: 123456
-          provider: nova
+          driver: nova
 
         my-openstack:
           identity_url: https://identity.api.rackspacecloud.com/v2.0/tokens
@@ -166,7 +166,7 @@ minion. In your pillar file, you would use something like this:
           apikey: apikey2
           tenant: 654321
           compute_region: DFW
-          provider: openstack
+          driver: openstack
           compute_name: cloudServersOpenStack
 
       profiles:
@@ -186,6 +186,27 @@ minion. In your pillar file, you would use something like this:
 Cloud Configurations
 ====================
 
+Scaleway
+--------
+
+To use Salt Cloud with Scaleway, you need to get an ``access key`` and an ``API token``. ``API tokens`` are unique identifiers associated with your Scaleway account.
+To retrieve your ``access key`` and ``API token``, log-in to the Scaleway control panel, open the pull-down menu on your account name and click on "My Credentials" link.
+
+If you do not have ``API token`` you can create one by clicking the "Create New Token" button on the right corner.
+
+.. code-block:: yaml
+
+    my-scaleway-config:
+      access_key: 15cf404d-4560-41b1-9a0c-21c3d5c4ff1f
+      token: a7347ec8-5de1-4024-a5e3-24b77d1ba91d
+      driver: scaleway
+
+.. note::
+
+    In the cloud profile that uses this provider configuration, the syntax for the
+    ``provider`` required field would be ``provider: my-scaleway-config``.
+
+
 Rackspace
 ---------
 
@@ -196,7 +217,7 @@ Rackspace cloud requires two configuration options; a ``user`` and an ``apikey``
     my-rackspace-config:
       user: example_user
       apikey: 123984bjjas87034
-      provider: rackspace-config
+      driver: rackspace
 
 .. note::
 
@@ -208,7 +229,7 @@ Amazon AWS
 ----------
 
 A number of configuration options are required for Amazon AWS including ``id``,
-``key``, ``keyname``, ``sercuritygroup``, and ``private_key``:
+``key``, ``keyname``, ``securitygroup``, and ``private_key``:
 
 .. code-block:: yaml
 
@@ -218,7 +239,7 @@ A number of configuration options are required for Amazon AWS including ``id``,
       keyname: test
       securitygroup: quick-start
       private_key: /root/test.pem
-      provider: aws
+      driver: ec2
 
     my-aws-default:
       id: HJGRYCILJLKJYG
@@ -226,7 +247,7 @@ A number of configuration options are required for Amazon AWS including ``id``,
       keyname: test
       securitygroup: default
       private_key: /root/test.pem
-      provider: aws
+      driver: ec2
 
 .. note::
 
@@ -248,7 +269,7 @@ be set:
       password: F00barbaz
       ssh_pubkey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKHEOLLbeXgaqRQT9NBAopVz366SdYc0KKX33vAnq+2R user@host
       ssh_key_file: ~/.ssh/id_ed25519
-      provider: linode
+      driver: linode
 
 The password needs to be 8 characters and contain lowercase, uppercase, and
 numbers.
@@ -273,7 +294,7 @@ to send the provisioning commands up to the freshly created virtual machine.
       user: fred
       password: saltybacon
       private_key: /root/joyent.pem
-      provider: joyent
+      driver: joyent
 
 .. note::
 
@@ -296,7 +317,7 @@ be set in the configuration file to enable interfacing with GoGrid:
     my-gogrid-config:
       apikey: asdff7896asdh789
       sharedsecret: saltybacon
-      provider: gogrid
+      driver: gogrid
 
 .. note::
 
@@ -325,7 +346,7 @@ both.
       ssh_key_name: mykey
       ssh_key_file: '/etc/salt/hpcloud/mykey.pem'
       password: mypass
-      provider: openstack
+      driver: openstack
 
     # For Rackspace
     my-openstack-rackspace-config:
@@ -337,7 +358,7 @@ both.
       user: myuser
       tenant: 5555555
       password: mypass
-      provider: openstack
+      driver: openstack
 
 
 If you have an API key for your provider, it may be specified instead of a
@@ -389,7 +410,7 @@ under the API Access tab.
 .. code-block:: yaml
 
     my-digitalocean-config:
-      provider: digital_ocean
+      driver: digital_ocean
       personal_access_token: xxx
       location: New York 1
 
@@ -411,7 +432,7 @@ can be obtained from your cloud provider.
       user: myuser
       password: xyzzy
       url: https://api.cloud.xmission.com:4465/paci/v1.0/
-      provider: parallels
+      driver: parallels
 
 .. note::
 
@@ -423,12 +444,12 @@ Proxmox
 -------
 
 Using Salt with Proxmox requires a ``user``, ``password``, and ``URL``. These can be
-obtained from your cloud provider. Both PAM and PVE users can be used.
+obtained from your cloud host. Both PAM and PVE users can be used.
 
 .. code-block:: yaml
 
     my-proxmox-config:
-      provider: proxmox
+      driver: proxmox
       user: saltcloud@pve
       password: xyzzy
       url: your.proxmox.host
@@ -450,7 +471,7 @@ those containers via this driver.
 
     devhost10-lxc:
       target: devhost10
-      provider: lxc
+      driver: lxc
 
 And in the map file:
 
@@ -472,42 +493,18 @@ And in the map file:
 .. note::
 
     In the cloud profile that uses this provider configuration, the syntax for the
-    ``provider`` required field would be ``provdier: devhost10-lxc`.
+    ``provider`` required field would be ``provider: devhost10-lxc``.
 
 .. _config_saltify:
 
 Saltify
 -------
 
-The Saltify driver is a new, experimental driver for installing Salt on
-existing machines (virtual or bare metal). Because it does not use an actual
-cloud provider, it needs no configuration in the main cloud config file.
-However, it does still require a profile to be set up, and is most useful when
-used inside a map file. The key parameters to be set are ``ssh_host``,
-``ssh_username`` and either ``ssh_keyfile`` or ``ssh_password``. These may all
-be set in either the profile or the map. An example configuration might use the
-following in cloud.profiles:
-
-.. code-block:: yaml
-
-    make_salty:
-      provider: saltify
-
-And in the map file:
-
-.. code-block:: yaml
-
-    make_salty:
-      - myinstance:
-        ssh_host: 54.262.11.38
-        ssh_username: ubuntu
-        ssh_keyfile: '/etc/salt/mysshkey.pem'
-        sudo: True
-
-.. note::
-
-    In the cloud profile that uses this provider configuration, the syntax for the
-    ``provider`` required field would be ``provider: make_salty``.
+The Saltify driver is a new, experimental driver designed to install Salt on a remote
+machine, virtual or bare metal, using SSH. This driver is useful for provisioning
+machines which are already installed, but not Salted. For more information about using
+this driver and for configuration examples, please see the
+:ref:`Gettting Started with Saltify <getting-started-with-saltify>` documentation.
 
 
 Extending Profiles and Cloud Providers Configuration
@@ -616,14 +613,14 @@ configuration.  Consider ``/etc/salt/salt/cloud.providers`` containing:
         private_key: /root/test.pem
         location: ap-southeast-1
         availability_zone: ap-southeast-1b
-        provider: aws
+        driver: ec2
 
       - user: myuser@mycorp.com
         password: mypass
         ssh_key_name: mykey
         ssh_key_file: '/etc/salt/ibm/mykey.pem'
         location: Raleigh
-        provider: ibmsce
+        driver: ibmsce
 
 
     my-productions-envs:
@@ -646,12 +643,12 @@ data:
              'keyname': 'test',
              'location': 'ap-southeast-1',
              'private_key': '/root/test.pem',
-             'provider': 'aws',
+             'driver': 'aws',
              'securitygroup': 'quick-start'
             },
             {'location': 'Raleigh',
              'password': 'mypass',
-             'provider': 'ibmsce',
+             'driver': 'ibmsce',
              'ssh_key_file': '/etc/salt/ibm/mykey.pem',
              'ssh_key_name': 'mykey',
              'user': 'myuser@mycorp.com'
@@ -661,7 +658,7 @@ data:
             {'availability_zone': 'us-east-1',
              'location': 'us-east-1',
              'password': 'mypass',
-             'provider': 'ibmsce',
+             'driver': 'ibmsce',
              'ssh_key_file': '/etc/salt/ibm/mykey.pem',
              'ssh_key_name': 'mykey',
              'user': 'my-production-user@mycorp.com'

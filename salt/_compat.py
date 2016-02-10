@@ -17,19 +17,19 @@ from salt.ext.six.moves import cStringIO, StringIO
 try:
     # Python >2.5
     import xml.etree.cElementTree as ElementTree
-except ImportError:
+except Exception:
     try:
         # Python >2.5
         import xml.etree.ElementTree as ElementTree
-    except ImportError:
+    except Exception:
         try:
             # normal cElementTree install
             import elementtree.cElementTree as ElementTree
-        except ImportError:
+        except Exception:
             try:
                 # normal ElementTree install
                 import elementtree.ElementTree as ElementTree
-            except ImportError:
+            except Exception:
                 raise
 
 
@@ -169,3 +169,9 @@ if sys.version_info < (2, 7):
             raise subprocess.CalledProcessError(retcode, cmd, output=output)
         return output
     subprocess.check_output = check_output
+
+
+if PY3:
+    import ipaddress
+else:
+    import salt.ext.ipaddress as ipaddress

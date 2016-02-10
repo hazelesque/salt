@@ -4,10 +4,6 @@
 ``netapi`` modules
 ==================
 
-.. toctree::
-
-    writing
-
 Introduction to netapi modules
 ==============================
 
@@ -42,4 +38,9 @@ simply by creating a data structure. (And this is exactly how much of Salt's
 own internals work!)
 
 .. autoclass:: salt.netapi.NetapiClient
-    :members: local, local_async, local_batch, runner, wheel
+    :members: local, local_async, local_batch, local_subset, runner, wheel
+
+.. toctree::
+
+    ../tutorials/http
+    writing

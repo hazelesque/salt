@@ -39,7 +39,7 @@ Connection module for Amazon VPC
             key: askdjghsdfjkghWupUjasdflkdfklgjsdfjajkghs
             region: us-east-1
 
-.. versionchanged:: Beryllium
+.. versionchanged:: 2015.8.0
     All methods now return a dictionary. Create and delete methods return:
 
     .. code-block:: yaml
@@ -117,26 +117,35 @@ def __virtual__():
     # which was added in boto 2.8.0
     # https://github.com/boto/boto/commit/33ac26b416fbb48a60602542b4ce15dcc7029f12
     if not HAS_BOTO:
-        return False
+        return (False, 'The boto_vpc module could not be loaded: boto libraries not found')
     elif _LooseVersion(boto.__version__) < _LooseVersion(required_boto_version):
-        return False
+        return (False, 'The boto_vpc module could not be loaded: boto library is not required version 2.8.0')
     else:
 
         return True
 
 
-def __init__(opts):
+def __init__(opts, pack=None):
     salt.utils.compat.pack_dunder(__name__)
     if HAS_BOTO:
-        __utils__['boto.assign_funcs'](__name__, 'vpc')
+        __utils__['boto.assign_funcs'](__name__, 'vpc', pack=pack)
 
 
-def _check_vpc(vpc_id, vpc_name, region, key, keyid, profile):
+def check_vpc(vpc_id=None, vpc_name=None, region=None, key=None,
+              keyid=None, profile=None):
     '''
     Check whether a VPC with the given name or id exists.
     Returns the vpc_id or None. Raises SaltInvocationError if
     both vpc_id and vpc_name are None. Optionally raise a
     CommandExecutionError if the VPC does not exist.
+
+    .. versionadded:: Boron
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion boto_vpc.check_vpc vpc_name=myvpc profile=awsprofile
     '''
 
     if not _exactly_one((vpc_name, vpc_id)):
@@ -357,7 +366,7 @@ def get_resource_id(resource, name=None, resource_id=None, region=None,
     '''
     Get an AWS id for a VPC resource by type and name.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -381,7 +390,7 @@ def resource_exists(resource, name=None, resource_id=None, tags=None,
     {exists: false} if it does not exist, or {error: {message: error text}
     on error.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -616,7 +625,7 @@ def describe(vpc_id=None, vpc_name=None, region=None, key=None,
 
     Returns a dictionary of interesting properties.
 
-    .. versionchanged:: Beryllium
+    .. versionchanged:: 2015.8.0
         Added vpc_name argument
 
     CLI Example:
@@ -633,7 +642,7 @@ def describe(vpc_id=None, vpc_name=None, region=None, key=None,
 
     try:
         conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
-        vpc_id = _check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
+        vpc_id = check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
         if not vpc_id:
             return {'vpc': None}
 
@@ -662,7 +671,7 @@ def describe_vpcs(vpc_id=None, name=None, cidr=None, tags=None,
 
     Returns a a list of dictionaries with interesting properties.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -717,7 +726,7 @@ def _find_subnets(subnet_name=None, vpc_id=None, cidr=None, tags=None, conn=None
     '''
 
     if not any(subnet_name, tags, cidr):
-        raise SaltInvocationError('At least on of the following must be '
+        raise SaltInvocationError('At least one of the following must be '
                                   'specified: subnet_name, cidr or tags.')
 
     filter_parameters = {'filters': {}}
@@ -754,7 +763,7 @@ def create_subnet(vpc_id=None, cidr_block=None, vpc_name=None,
 
     Returns True if the VPC subnet was created and returns False if the VPC subnet was not created.
 
-    .. versionchanged:: Beryllium
+    .. versionchanged:: 2015.8.0
         Added vpc_name argument
 
     CLI Examples:
@@ -768,16 +777,16 @@ def create_subnet(vpc_id=None, cidr_block=None, vpc_name=None,
     '''
 
     try:
-        vpc_id = _check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
+        vpc_id = check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
         if not vpc_id:
             return {'created': False, 'error': {'message': 'VPC {0} does not exist.'.format(vpc_name or vpc_id)}}
     except BotoServerError as e:
         return {'created': False, 'error': salt.utils.boto.get_error(e)}
 
-    return _create_resource('subnet', name=subnet_name, tags=tags,
-                            vpc_id=vpc_id, cidr_block=cidr_block,
-                            region=region, key=key, keyid=keyid,
-                            profile=profile)
+    return _create_resource('subnet', name=subnet_name, tags=tags, vpc_id=vpc_id,
+                            availability_zone=availability_zone,
+                            cidr_block=cidr_block, region=region, key=key,
+                            keyid=keyid, profile=profile)
 
 
 def delete_subnet(subnet_id=None, subnet_name=None, region=None, key=None,
@@ -787,7 +796,7 @@ def delete_subnet(subnet_id=None, subnet_name=None, region=None, key=None,
 
     Returns True if the subnet was deleted and returns False if the subnet was not deleted.
 
-    .. versionchanged:: Beryllium
+    .. versionchanged:: 2015.8.0
         Added subnet_name argument
 
     CLI Example:
@@ -811,7 +820,7 @@ def subnet_exists(subnet_id=None, name=None, subnet_name=None, cidr=None,
 
     Returns True if the subnet exists, otherwise returns False.
 
-    .. versionchanged:: Beryllium
+    .. versionchanged:: 2015.8.0
         Added subnet_name argument
         Deprecated name argument
 
@@ -917,7 +926,7 @@ def describe_subnet(subnet_id=None, subnet_name=None, region=None,
 
     Returns a dictionary of interesting properties.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Examples:
 
@@ -949,7 +958,7 @@ def describe_subnets(subnet_ids=None, subnet_names=None, vpc_id=None, cidr=None,
     If a subnet id or CIDR is provided, only its associated subnet details will be
     returned.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Examples:
 
@@ -1014,7 +1023,8 @@ def create_internet_gateway(internet_gateway_name=None, vpc_id=None,
     Returns the internet gateway id if the internet gateway was created and
     returns False if the internet gateways was not created.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
+
     CLI Example:
 
     .. code-block:: bash
@@ -1026,7 +1036,7 @@ def create_internet_gateway(internet_gateway_name=None, vpc_id=None,
 
     try:
         if vpc_id or vpc_name:
-            vpc_id = _check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
+            vpc_id = check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
             if not vpc_id:
                 return {'created': False,
                         'error': {'message': 'VPC {0} does not exist.'.format(vpc_name or vpc_id)}}
@@ -1053,7 +1063,7 @@ def delete_internet_gateway(internet_gateway_id=None,
 
     Returns True if the internet gateway was deleted and otherwise False.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Examples:
 
@@ -1131,7 +1141,7 @@ def delete_customer_gateway(customer_gateway_id=None, customer_gateway_name=None
 
     Returns True if the customer gateway was deleted and returns False if the customer gateway was not deleted.
 
-    .. versionchanged:: Beryllium
+    .. versionchanged:: 2015.8.0
         Added customer_gateway_name argument
 
     CLI Example:
@@ -1180,7 +1190,7 @@ def create_dhcp_options(domain_name=None, domain_name_servers=None, ntp_servers=
 
     Returns True if the DHCP options record was created and returns False if the DHCP options record was not deleted.
 
-    .. versionchanged:: Beryllium
+    .. versionchanged:: 2015.8.0
         Added vpc_name and vpc_id arguments
 
     CLI Example:
@@ -1196,7 +1206,7 @@ def create_dhcp_options(domain_name=None, domain_name_servers=None, ntp_servers=
 
     try:
         if vpc_id or vpc_name:
-            vpc_id = _check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
+            vpc_id = check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
             if not vpc_id:
                 return {'created': False,
                         'error': {'message': 'VPC {0} does not exist.'.format(vpc_name or vpc_id)}}
@@ -1217,12 +1227,51 @@ def create_dhcp_options(domain_name=None, domain_name_servers=None, ntp_servers=
         return {'created': False, 'error': salt.utils.boto.get_error(e)}
 
 
+def get_dhcp_options(dhcp_options_name=None, dhcp_options_id=None,
+                     region=None, key=None, keyid=None, profile=None):
+    '''
+    Return a dict with the current values of the requested DHCP options set
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt myminion boto_vpc.get_dhcp_options 'myfunnydhcpoptionsname'
+
+    .. versionadded:: Boron
+    '''
+    if not any((dhcp_options_name, dhcp_options_id)):
+        raise SaltInvocationError('At least one of the following must be specified: '
+                                  'dhcp_options_name, dhcp_options_id.')
+
+    if not dhcp_options_id and dhcp_options_name:
+        dhcp_options_id = _get_resource_id('dhcp_options', dhcp_options_name,
+                                            region=region, key=key,
+                                            keyid=keyid, profile=profile)
+    if not dhcp_options_id:
+        return {'dhcp_options': {}}
+
+    try:
+        conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+        r = conn.get_all_dhcp_options(dhcp_options_ids=[dhcp_options_id])
+    except BotoServerError as e:
+        return {'error': salt.utils.boto.get_error(e)}
+
+    if not r:
+        return {'dhcp_options': None}
+
+    keys = ('domain_name', 'domain_name_servers', 'ntp_servers',
+            'netbios_name_servers', 'netbios_node_type')
+
+    return {'dhcp_options': dict((k, r[0].options.get(k)) for k in keys)}
+
+
 def delete_dhcp_options(dhcp_options_id=None, dhcp_options_name=None,
                         region=None, key=None, keyid=None, profile=None):
     '''
     Delete dhcp options by id or name.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -1254,7 +1303,7 @@ def associate_dhcp_options_to_vpc(dhcp_options_id, vpc_id=None, vpc_name=None,
 
     '''
     try:
-        vpc_id = _check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
+        vpc_id = check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
         if not vpc_id:
             return {'associated': False,
                     'error': {'message': 'VPC {0} does not exist.'.format(vpc_name or vpc_id)}}
@@ -1274,12 +1323,12 @@ def associate_new_dhcp_options_to_vpc(vpc_id, domain_name=None, domain_name_serv
                                       netbios_name_servers=None, netbios_node_type=None,
                                       region=None, key=None, keyid=None, profile=None):
     '''
-    ..deprecated:: Beryllium
+    ..deprecated:: Boron
         This function has been deprecated in favor of
         :py:func:`boto_vpc.create_dhcp_options <salt.modules.boto_vpc.create_dhcp_options>`,
         which now takes vpc_id or vpc_name as kwargs.
 
-        This function will be removed in a future release.
+        This function will be removed in the Salt Boron release.
 
     Given valid DHCP options and a valid VPC id, create and associate the DHCP options record with the VPC.
 
@@ -1290,6 +1339,11 @@ def associate_new_dhcp_options_to_vpc(vpc_id, domain_name=None, domain_name_serv
         salt myminion boto_vpc.associate_new_dhcp_options_to_vpc 'vpc-6b1fe402' domain_name='example.com' domain_name_servers='[1.2.3.4]' ntp_servers='[5.6.7.8]' netbios_name_servers='[10.0.0.1]' netbios_node_type=1
 
     '''
+    salt.utils.warn_until(
+        'Boron',
+        'Support for \'associate_new_dhcp_options_to_vpc\' has been deprecated '
+        'and will be removed in Salt Boron. Please use \'create_dhcp_options\' instead.'
+    )
 
     return create_dhcp_options(vpc_id=vpc_id, domain_name=domain_name,
                                domain_name_servers=domain_name_servers,
@@ -1333,7 +1387,7 @@ def create_network_acl(vpc_id=None, vpc_name=None, network_acl_name=None,
 
     Returns the network acl id if successful, otherwise returns False.
 
-    .. versionchanged:: Beryllium
+    .. versionchanged:: 2015.8.0
         Added vpc_name, subnet_id, and subnet_name arguments
 
     CLI Example:
@@ -1347,7 +1401,7 @@ def create_network_acl(vpc_id=None, vpc_name=None, network_acl_name=None,
     _id = vpc_name or vpc_id
 
     try:
-        vpc_id = _check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
+        vpc_id = check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
     except BotoServerError as e:
         return {'created': False, 'error': salt.utils.boto.get_error(e)}
 
@@ -1499,12 +1553,12 @@ def associate_network_acl_to_subnet(network_acl_id=None, subnet_id=None,
 def associate_new_network_acl_to_subnet(vpc_id, subnet_id, network_acl_name=None, tags=None,
                                         region=None, key=None, keyid=None, profile=None):
     '''
-    ..deprecated:: Beryllium
+    ..deprecated:: Boron
         This function has been deprecated in favor of
         :py:func:`boto_vpc.create_network_acl <salt.modules.boto_vpc.create_network_acl>`,
         which now takes subnet_id or subnet_name as kwargs.
 
-        This function will be removed in a future release.
+        This function will be removed in the Salt Boron release.
 
     Given a vpc ID and a subnet ID, associates a new network act to a subnet.
 
@@ -1517,6 +1571,11 @@ def associate_new_network_acl_to_subnet(vpc_id, subnet_id, network_acl_name=None
 
         salt myminion boto_vpc.associate_new_network_acl_to_subnet 'vpc-6b1fe402' 'subnet-6a1fe403'
     '''
+    salt.utils.warn_until(
+        'Boron',
+        'Support for \'associate_new_network_acl_to_subnet\' has been deprecated '
+        'and will be removed in Salt Boron. Please use \'create_network_acl\' instead.'
+    )
 
     return create_network_acl(vpc_id=vpc_id, subnet_id=subnet_id,
                               network_acl_name=network_acl_name, tags=tags,
@@ -1553,7 +1612,7 @@ def disassociate_network_acl(subnet_id=None, vpc_id=None, subnet_name=None, vpc_
                         'error': {'message': 'Subnet {0} does not exist.'.format(subnet_name)}}
 
         if vpc_name or vpc_id:
-            vpc_id = _check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
+            vpc_id = check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
 
         conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
         association_id = conn.disassociate_network_acl(subnet_id, vpc_id=vpc_id)
@@ -1703,7 +1762,7 @@ def create_route_table(vpc_id=None, vpc_name=None, route_table_name=None,
     '''
     Creates a route table.
 
-    .. versionchanged:: Beryllium
+    .. versionchanged:: 2015.8.0
         Added vpc_name argument
 
     CLI Examples:
@@ -1715,7 +1774,7 @@ def create_route_table(vpc_id=None, vpc_name=None, route_table_name=None,
         salt myminion boto_vpc.create_route_table vpc_name='myvpc' \\
                 route_table_name='myroutetable'
     '''
-    vpc_id = _check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
+    vpc_id = check_vpc(vpc_id, vpc_name, region, key, keyid, profile)
     if not vpc_id:
         return {'created': False, 'error': {'message': 'VPC {0} does not exist.'.format(vpc_name or vpc_id)}}
 
@@ -1771,7 +1830,7 @@ def route_exists(destination_cidr_block, route_table_name=None, route_table_id=N
     '''
     Checks if a route exists.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -1782,10 +1841,10 @@ def route_exists(destination_cidr_block, route_table_name=None, route_table_id=N
     '''
 
     if not any((route_table_name, route_table_id)):
-        raise SaltInvocationError('At least on of the following must be specified: route table name or route table id.')
+        raise SaltInvocationError('At least one of the following must be specified: route table name or route table id.')
 
     if not any((gateway_id, instance_id, interface_id)):
-        raise SaltInvocationError('At least on of the following must be specified: gateway id, instance id'
+        raise SaltInvocationError('At least one of the following must be specified: gateway id, instance id'
                                   ' or interface id.')
 
     try:
@@ -2073,7 +2132,7 @@ def describe_route_table(route_table_id=None, route_table_name=None,
     '''
     Given route table properties, return route table details if matching table(s) exist.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -2104,7 +2163,7 @@ def describe_route_table(route_table_id=None, route_table_name=None,
         route_tables = conn.get_all_route_tables(**filter_parameters)
 
         if not route_tables:
-            return False
+            return {}
 
         route_table = {}
         keys = ['id', 'vpc_id', 'tags', 'routes', 'associations']

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 
-# TODO: Update skipped tests to expect dicttionary results from the execution
+# TODO: Update skipped tests to expect dictionary results from the execution
 #       module functions.
 
 # Import Python libs
 from __future__ import absolute_import
-
 from distutils.version import LooseVersion  # pylint: disable=import-error,no-name-in-module
 
 # Import Salt Testing libs
@@ -24,7 +23,7 @@ from salt.modules.boto_vpc import _maybe_set_name_tag, _maybe_set_tags
 
 # Import 3rd-party libs
 import salt.ext.six as six
-# pylint: disable=import-error
+# pylint: disable=import-error,no-name-in-module
 try:
     import boto
     from boto.exception import BotoServerError
@@ -33,6 +32,7 @@ except ImportError:
     HAS_BOTO = False
 
 try:
+    import moto
     from moto import mock_ec2
     HAS_MOTO = True
 except ImportError:
@@ -50,7 +50,7 @@ except ImportError:
             pass
 
         return stub_function
-# pylint: enable=import-error
+# pylint: enable=import-error,no-name-in-module
 
 # the boto_vpc module relies on the connect_to_region() method
 # which was added in boto 2.8.0
@@ -70,9 +70,10 @@ dhcp_options_parameters.update(conn_parameters)
 
 opts = salt.config.DEFAULT_MINION_OPTS
 utils = salt.loader.utils(opts, whitelist=['boto'])
+mods = salt.loader.minion_mods(opts)
 
 boto_vpc.__utils__ = utils
-boto_vpc.__init__(opts)
+boto_vpc.__init__(opts, pack=mods)
 
 
 def _has_required_boto():
@@ -96,13 +97,17 @@ def _has_required_moto():
     if not HAS_MOTO:
         return False
     else:
-        import pkg_resources
-        from pkg_resources import DistributionNotFound
         try:
-            if LooseVersion(pkg_resources.get_distribution('moto').version) < LooseVersion(required_moto_version):
+            if LooseVersion(moto.__version__) < LooseVersion(required_moto_version):
                 return False
-        except DistributionNotFound:
-            return False
+        except AttributeError:
+            import pkg_resources
+            from pkg_resources import DistributionNotFound
+            try:
+                if LooseVersion(pkg_resources.get_distribution('moto').version) < LooseVersion(required_moto_version):
+                    return False
+            except DistributionNotFound:
+                return False
         return True
 
 
@@ -127,14 +132,14 @@ class BotoVpcTestCaseMixin(object):
         _maybe_set_tags(tags, vpc)
         return vpc
 
-    def _create_subnet(self, vpc_id, cidr_block='10.0.0.0/25', name=None, tags=None):
+    def _create_subnet(self, vpc_id, cidr_block='10.0.0.0/25', name=None, tags=None, availability_zone=None):
         '''
         Helper function to create a test subnet
         '''
         if not self.conn:
             self.conn = boto.vpc.connect_to_region(region)
 
-        subnet = self.conn.create_subnet(vpc_id, cidr_block)
+        subnet = self.conn.create_subnet(vpc_id, cidr_block, availability_zone=availability_zone)
         _maybe_set_name_tag(name, subnet)
         _maybe_set_tags(tags, subnet)
         return subnet
@@ -224,6 +229,7 @@ class BotoVpcTestCaseMixin(object):
 @skipIf(_has_required_boto() is False, 'The boto module must be greater than'
                                        ' or equal to version {0}'
         .format(required_boto_version))
+@skipIf(_has_required_moto() is False, 'The moto version must be >= to version {0}'.format(required_moto_version))
 class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
     '''
     TestCase for salt.modules.boto_vpc module
@@ -241,8 +247,6 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(vpc_exists_result['exists'])
 
     @mock_ec2
-    @skipIf(_has_required_moto() is False, 'The moto module does not support filtering vpcs.'
-                                           'Added support in spulec/moto#218. Next release should solve this issue.')
     def test_that_when_checking_if_a_vpc_exists_by_id_and_a_vpc_does_not_exist_the_vpc_exists_method_returns_false(
             self):
         '''
@@ -266,8 +270,6 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(vpc_exists_result['exists'])
 
     @mock_ec2
-    @skipIf(_has_required_moto() is False, 'The moto module does not support filtering vpcs.'
-                                           'Added support in spulec/moto#218. Next release should solve this issue.')
     def test_that_when_checking_if_a_vpc_exists_by_name_and_a_vpc_does_not_exist_the_vpc_exists_method_returns_false(
             self):
         '''
@@ -291,8 +293,6 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(vpc_exists_result['exists'])
 
     @mock_ec2
-    @skipIf(_has_required_moto() is False, 'The moto module does not support filtering vpcs.'
-                                           'Added support in spulec/moto#218. Next release should solve this issue.')
     def test_that_when_checking_if_a_vpc_exists_by_tags_and_a_vpc_does_not_exist_the_vpc_exists_method_returns_false(
             self):
         '''
@@ -316,8 +316,6 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(vpc_exists_result['exists'])
 
     @mock_ec2
-    @skipIf(_has_required_moto() is False, 'The moto module does not support filtering vpcs.'
-                                           'Added support in spulec/moto#218. Next release should solve this issue.')
     def test_that_when_checking_if_a_vpc_exists_by_cidr_and_a_vpc_does_not_exist_the_vpc_exists_method_returns_false(
             self):
         '''
@@ -330,6 +328,7 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertFalse(vpc_exists_result['exists'])
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_checking_if_a_vpc_exists_but_providing_no_filters_the_vpc_exists_method_raises_a_salt_invocation_error(self):
         '''
         Tests checking vpc existence when no filters are provided
@@ -406,6 +405,7 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertEqual(get_id_result['id'], None)
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_get_vpc_id_method_when_not_providing_filters_raises_a_salt_invocation_error(self):
         '''
         Tests getting vpc id but providing no filters
@@ -452,6 +452,7 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(vpc_creation_result)
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_creating_a_vpc_fails_the_create_vpc_method_returns_false(self):
         '''
         tests False VPC not created.
@@ -492,7 +493,7 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
 
         vpc_properties = dict(id=vpc.id,
                               cidr_block=six.text_type(cidr_block),
-                              is_default=None,
+                              is_default=False,
                               state=u'available',
                               tags={u'Name': u'test', u'test': u'testvalue'},
                               dhcp_options_id=u'dopt-7a8b9c2d',
@@ -512,6 +513,7 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertFalse(describe_vpc['vpc'])
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_describing_vpc_by_id_on_connection_error_it_returns_error(self):
         '''
         Tests describing parameters failure
@@ -539,6 +541,7 @@ class BotoVpcTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
 @skipIf(_has_required_boto() is False, 'The boto module must be greater than'
                                        ' or equal to version {0}'
         .format(required_boto_version))
+@skipIf(_has_required_moto() is False, 'The moto version must be >= to version {0}'.format(required_moto_version))
 class BotoVpcSubnetsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
     @mock_ec2
     def test_get_subnet_association_single_subnet(self):
@@ -616,6 +619,7 @@ class BotoVpcSubnetsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(subnet_creation_result['created'])
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_creating_a_subnet_fails_the_create_subnet_method_returns_error(self):
         '''
         Tests creating a subnet failure
@@ -668,8 +672,6 @@ class BotoVpcSubnetsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertFalse(subnet_exists_result['exists'])
 
     @mock_ec2
-    @skipIf(_has_required_moto() is False, 'The moto module does not support filtering by tags. '
-                                           'Added support in spulec/moto#218. Next release should solve this issue.')
     def test_that_when_checking_if_a_subnet_exists_by_name_the_subnet_exists_method_returns_true(self):
         '''
         Tests checking subnet existence by name
@@ -682,8 +684,6 @@ class BotoVpcSubnetsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(subnet_exists_result['exists'])
 
     @mock_ec2
-    @skipIf(_has_required_moto() is False, 'The moto module does not support filtering by tags. '
-                                           'Added support in spulec/moto#218. Next release should solve this issue.')
     def test_that_when_checking_if_a_subnet_exists_by_name_the_subnet_does_not_exist_the_subnet_method_returns_false(self):
         '''
         Tests checking subnet existence by name when it doesn't exist
@@ -696,8 +696,6 @@ class BotoVpcSubnetsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertFalse(subnet_exists_result['exists'])
 
     @mock_ec2
-    @skipIf(_has_required_moto() is False, 'The moto module does not support filtering by tags. '
-                                           'Added support in spulec/moto#218. Next release should solve this issue.')
     def test_that_when_checking_if_a_subnet_exists_by_tags_the_subnet_exists_method_returns_true(self):
         '''
         Tests checking subnet existence by tag
@@ -710,8 +708,6 @@ class BotoVpcSubnetsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(subnet_exists_result['exists'])
 
     @mock_ec2
-    @skipIf(_has_required_moto() is False, 'The moto module does not support filtering by tags. '
-                                           'Added support in spulec/moto#218. Next release should solve this issue.')
     def test_that_when_checking_if_a_subnet_exists_by_tags_the_subnet_does_not_exist_the_subnet_method_returns_false(self):
         '''
         Tests checking subnet existence by tag when subnet doesn't exist
@@ -724,6 +720,7 @@ class BotoVpcSubnetsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertFalse(subnet_exists_result['exists'])
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_checking_if_a_subnet_exists_but_providing_no_filters_the_subnet_exists_method_raises_a_salt_invocation_error(self):
         '''
         Tests checking subnet existence without any filters
@@ -803,6 +800,16 @@ class BotoVpcSubnetsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertEqual(len(describe_subnet_results['subnets']), 2)
         self.assertEqual(set(describe_subnet_results['subnets'][0].keys()),
                          set(['id', 'cidr_block', 'availability_zone', 'tags']))
+
+    @mock_ec2
+    def test_create_subnet_passes_availability_zone(self):
+        '''
+        Tests that the availability_zone kwarg is passed on to _create_resource
+        '''
+        vpc = self._create_vpc()
+        self._create_subnet(vpc.id, name='subnet1', availability_zone='us-east-1a')
+        describe_subnet_results = boto_vpc.describe_subnets(subnet_names=['subnet1'])
+        self.assertEqual(describe_subnet_results['subnets'][0]['availability_zone'], 'us-east-1a')
 
 
 @skipIf(NO_MOCK, NO_MOCK_REASON)
@@ -899,8 +906,7 @@ class BotoVpcCustomerGatewayTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
 @skipIf(_has_required_boto() is False, 'The boto module must be greater than'
                                        ' or equal to version {0}'
         .format(required_boto_version))
-@skipIf(_has_required_moto() is False, 'The moto module has a bug in creating DHCP options which is fixed '
-                                       'in spulec/moto#214. Next release should solve this issue.')
+@skipIf(_has_required_moto() is False, 'The moto version must be >= to version {0}'.format(required_moto_version))
 class BotoVpcDHCPOptionsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
     @mock_ec2
     def test_that_when_creating_dhcp_options_succeeds_the_create_dhcp_options_method_returns_true(self):
@@ -935,6 +941,7 @@ class BotoVpcDHCPOptionsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(dhcp_options_creation_result['created'])
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_creating_dhcp_options_fails_the_create_dhcp_options_method_returns_error(self):
         '''
         Tests creating dhcp options failure
@@ -997,6 +1004,7 @@ class BotoVpcDHCPOptionsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertTrue(dhcp_creation_and_association_result['created'])
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_creating_and_associating_dhcp_options_set_to_an_existing_vpc_fails_creating_the_dhcp_options_the_associate_new_dhcp_options_method_raises_exception(
             self):
         '''
@@ -1010,6 +1018,7 @@ class BotoVpcDHCPOptionsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
             self.assertTrue('error' in r)
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_creating_and_associating_dhcp_options_set_to_an_existing_vpc_fails_associating_the_dhcp_options_the_associate_new_dhcp_options_method_raises_exception(self):
         '''
         Tests association failure during creation/association of dchp options to existing vpc
@@ -1051,6 +1060,7 @@ class BotoVpcDHCPOptionsTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertFalse(r['exists'])
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_checking_if_dhcp_options_exists_but_providing_no_filters_the_dhcp_options_exists_method_raises_a_salt_invocation_error(self):
         '''
         Tests checking dhcp option existence with no filters
@@ -1175,6 +1185,7 @@ class BotoVpcNetworkACLTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertFalse(network_acl_deletion_result['exists'])
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_checking_if_network_acl_exists_but_providing_no_filters_the_network_acl_exists_method_raises_a_salt_invocation_error(self):
         '''
         Tests checking existence of network acl with no filters
@@ -1507,6 +1518,7 @@ class BotoVpcRouteTablesTestCase(BotoVpcTestCaseBase, BotoVpcTestCaseMixin):
         self.assertFalse(route_table_existence_result)
 
     @mock_ec2
+    @skipIf(True, 'Disabled pending https://github.com/spulec/moto/issues/493')
     def test_that_when_checking_if_a_route_table_exists_but_providing_no_filters_the_route_table_exists_method_raises_a_salt_invocation_error(self):
         '''
         Tests checking route table without filters

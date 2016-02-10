@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 '''
 Support for firewalld.
 
@@ -12,6 +11,7 @@ import logging
 import re
 
 # Import Salt Libs
+from salt.exceptions import CommandExecutionError
 import salt.utils
 
 log = logging.getLogger(__name__)
@@ -24,23 +24,25 @@ def __virtual__():
     if salt.utils.which('firewall-cmd'):
         return True
 
-    return False
+    return (False, 'The firewalld execution module cannot be loaded: the firewall-cmd binary is not in the path.')
 
 
 def __firewall_cmd(cmd):
     '''
     Return the firewall-cmd location
     '''
-    out = __salt__['cmd.run']('{0} {1}'.format(
-        salt.utils.which('firewall-cmd'),
-        cmd))
+    firewall_cmd = '{0} {1}'.format(salt.utils.which('firewall-cmd'), cmd)
+    out = __salt__['cmd.run_all'](firewall_cmd)
 
-    if out == 'success':
-        return 'success'
-    elif 'Error' in out:
-        return out[5:-5]
-
-    return out
+    if out['retcode'] != 0:
+        if not out['stderr']:
+            msg = out['stdout']
+        else:
+            msg = out['stderr']
+        raise CommandExecutionError(
+            'firewall-cmd failed: {0}'.format(msg)
+        )
+    return out['stdout']
 
 
 def __mgmt(name, _type, action):
@@ -403,7 +405,7 @@ def get_masquerade(zone):
     '''
     zone_info = list_all(zone)
 
-    if [zone_info[i]['masquerade'][0] for i in zone_info.keys()] == 'no':
+    if 'no' in [zone_info[i]['masquerade'][0] for i in zone_info.keys()]:
         return False
 
     return True
@@ -413,7 +415,7 @@ def add_masquerade(zone):
     '''
     Enable masquerade on a zone.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -428,7 +430,7 @@ def remove_masquerade(zone):
     '''
     Remove masquerade on a zone.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -439,11 +441,11 @@ def remove_masquerade(zone):
     return __firewall_cmd('--zone={0} --remove-masquerade'.format(zone))
 
 
-def add_port(zone, port):
+def add_port(zone, port, permanent=True):
     '''
     Allow specific ports in a zone.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -454,14 +456,19 @@ def add_port(zone, port):
     if not get_masquerade(zone):
         add_masquerade(zone)
 
-    return __firewall_cmd('--zone={0} --add-port={1}'.format(zone, port))
+    cmd = '--zone={0} --add-port={1}'.format(zone, port)
+
+    if permanent:
+        cmd += ' --permanent'
+
+    return __firewall_cmd(cmd)
 
 
-def remove_port(zone, port):
+def remove_port(zone, port, permanent=True):
     '''
     Remove a specific port from a zone.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -469,14 +476,19 @@ def remove_port(zone, port):
 
         salt '*' firewalld.remove_port internal 443/tcp
     '''
-    return __firewall_cmd('--zone={0} --remove-port={1}'.format(zone, port))
+    cmd = '--zone={0} --remove-port={1}'.format(zone, port)
+
+    if permanent:
+        cmd += ' --permanent'
+
+    return __firewall_cmd(cmd)
 
 
 def list_ports(zone):
     '''
     List all ports in a zone.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -491,7 +503,7 @@ def add_port_fwd(zone, src, dest, proto='tcp', dstaddr=''):
     '''
     Add port forwarding.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -517,7 +529,7 @@ def remove_port_fwd(zone, src, dest, proto='tcp'):
     '''
     Remove Port Forwarding.
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -539,7 +551,7 @@ def list_port_fwd(zone):
     '''
     List port forwarding
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -566,7 +578,7 @@ def block_icmp(zone, icmp):
     '''
     Block a specific ICMP type on a zone
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -589,7 +601,7 @@ def allow_icmp(zone, icmp):
     '''
     Allow a specific ICMP type on a zone
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -612,7 +624,7 @@ def list_icmp_block(zone):
     '''
     List ICMP blocks on a zone
 
-    .. versionadded:: Beryllium
+    .. versionadded:: 2015.8.0
 
     CLI Example:
 
@@ -621,3 +633,120 @@ def list_icmp_block(zone):
         salt '*' firewlld.list_icmp_block zone
     '''
     return __firewall_cmd('--zone={0} --list-icmp-blocks'.format(zone)).split()
+
+
+def make_permanent():
+    '''
+    Make current runtime configuration permanent.
+
+    .. versionadded:: Boron
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' firewalld.make_permanent
+    '''
+    return __firewall_cmd('--runtime-to-permanent')
+
+
+def get_interfaces(zone):
+    '''
+    List interfaces bound to a zone
+
+    .. versionadded:: Boron
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' firewalld.get_interfaces zone
+    '''
+    return __firewall_cmd('--zone={0} --list-interfaces'.format(zone)).split()
+
+
+def add_interface(zone, interface):
+    '''
+    Bind an interface to a zone
+
+    .. versionadded:: Boron
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' firewalld.add_interface zone eth0
+    '''
+    if interface in get_interfaces(zone):
+        log.info('Interface is already bound to zone.')
+
+    return __firewall_cmd('--zone={0} --add-interface={1}'.format(zone, interface))
+
+
+def remove_interface(zone, interface):
+    '''
+    Remove an interface bound to a zone
+
+    .. versionadded:: Boron
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' firewalld.remove_interface zone eth0
+    '''
+    if interface not in get_interfaces(zone):
+        log.info('Interface is not bound to zone.')
+
+    return __firewall_cmd('--zone={0} --remove-interface={1}'.format(zone, interface))
+
+
+def get_sources(zone):
+    '''
+    List sources bound to a zone
+
+    .. versionadded:: Boron
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' firewalld.get_sources zone
+    '''
+    return __firewall_cmd('--zone={0} --list-sources'.format(zone)).split()
+
+
+def add_source(zone, source):
+    '''
+    Bind a source to a zone
+
+    .. versionadded:: Boron
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' firewalld.add_source zone 192.168.1.0/24
+    '''
+    if source in get_sources(zone):
+        log.info('Source is already bound to zone.')
+
+    return __firewall_cmd('--zone={0} --add-source={1}'.format(zone, source))
+
+
+def remove_source(zone, source):
+    '''
+    Remove a source bound to a zone
+
+    .. versionadded:: Boron
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' firewalld.remove_source zone 192.168.1.0/24
+    '''
+    if source not in get_sources(zone):
+        log.info('Source is not bound to zone.')
+
+    return __firewall_cmd('--zone={0} --remove-source={1}'.format(zone, source))

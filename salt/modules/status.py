@@ -7,6 +7,7 @@ These data can be useful for compiling into stats later.
 
 # Import python libs
 from __future__ import absolute_import
+import datetime
 import os
 import re
 import fnmatch
@@ -24,15 +25,14 @@ from salt.utils.network import host_to_ip as _host_to_ip
 from salt.utils.network import remote_port_tcp as _remote_port_tcp
 from salt.ext.six.moves import zip
 
-
+__virtualname__ = 'status'
 __opts__ = {}
 
 
-# TODO: Make this module support windows hosts
 def __virtual__():
     if salt.utils.is_windows():
-        return False
-    return True
+        return (False, 'Cannot load status module on windows')
+    return __virtualname__
 
 
 def _number(text):
@@ -121,9 +121,15 @@ def custom():
     return ret
 
 
-def uptime():
+def uptime(human_readable=True):
     '''
     Return the uptime for this minion
+
+    human_readable: True
+        If ``True`` return the output provided by the system.  If ``False``
+        return the output in seconds.
+
+        .. versionadded:: 2015.8.4
 
     CLI Example:
 
@@ -131,7 +137,16 @@ def uptime():
 
         salt '*' status.uptime
     '''
-    return __salt__['cmd.run']('uptime')
+    if human_readable:
+        return __salt__['cmd.run']('uptime')
+    else:
+        if os.path.exists('/proc/uptime'):
+            out = __salt__['cmd.run']('cat /proc/uptime').split()
+            if len(out):
+                return out[0]
+            else:
+                return 'unexpected format in /proc/uptime'
+        return 'cannot find /proc/uptime'
 
 
 def loadavg():
@@ -443,6 +458,8 @@ def diskusage(*args):
             ifile = salt.utils.fopen(procf, 'r').readlines()
         elif __grains__['kernel'] == 'FreeBSD':
             ifile = __salt__['cmd.run']('mount -p').splitlines()
+        else:
+            ifile = []
 
         for line in ifile:
             comps = line.split()
@@ -812,3 +829,26 @@ def master(master=None, connected=True):
         if master_ip in ips:
             event = salt.utils.event.get_event('minion', opts=__opts__, listen=False)
             event.fire_event({'master': master}, '__master_connected')
+
+
+def time(format='%A, %d. %B %Y %I:%M%p'):
+    '''
+    .. versionadded:: Boron
+
+    Return the current time on the minion,
+    formated based on the format parameter.
+
+    Default date format: Monday, 27. July 2015 07:55AM
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' status.time
+
+        salt '*' status.time '%s'
+
+    '''
+
+    dt = datetime.datetime.today()
+    return dt.strftime(format)

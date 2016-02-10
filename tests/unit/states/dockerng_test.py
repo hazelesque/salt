@@ -20,6 +20,7 @@ from salttesting.mock import (
 ensure_in_syspath('../../')
 
 # Import Salt Libs
+from salt.exceptions import CommandExecutionError
 from salt.modules import dockerng as dockerng_mod
 from salt.states import dockerng as dockerng_state
 
@@ -65,13 +66,11 @@ class DockerngTestCase(TestCase):
             'image:latest',
             validate_input=False,
             name='cont',
-            volumes=['/container-0'],
-            client_timeout=60)
-        dockerng_start.assert_called_with(
-            'cont',
             binds={'/host-0': {'bind': '/container-0', 'ro': True}},
+            volumes=['/container-0'],
             validate_ip_addrs=False,
-            validate_input=False)
+            client_timeout=60)
+        dockerng_start.assert_called_with('cont')
 
     def test_running_with_predifined_volume(self):
         '''
@@ -102,13 +101,11 @@ class DockerngTestCase(TestCase):
         dockerng_create.assert_called_with(
             'image:latest',
             validate_input=False,
-            name='cont',
-            client_timeout=60)
-        dockerng_start.assert_called_with(
-            'cont',
             binds={'/host-0': {'bind': '/container-0', 'ro': True}},
             validate_ip_addrs=False,
-            validate_input=False)
+            name='cont',
+            client_timeout=60)
+        dockerng_start.assert_called_with('cont')
 
     def test_running_with_no_predifined_ports(self):
         '''
@@ -141,12 +138,10 @@ class DockerngTestCase(TestCase):
             validate_input=False,
             name='cont',
             ports=[9797],
-            client_timeout=60)
-        dockerng_start.assert_called_with(
-            'cont',
             port_bindings={9797: [9090]},
             validate_ip_addrs=False,
-            validate_input=False)
+            client_timeout=60)
+        dockerng_start.assert_called_with('cont')
 
     def test_running_with_predifined_ports(self):
         '''
@@ -178,12 +173,10 @@ class DockerngTestCase(TestCase):
             'image:latest',
             validate_input=False,
             name='cont',
-            client_timeout=60)
-        dockerng_start.assert_called_with(
-            'cont',
             port_bindings={9797: [9090]},
             validate_ip_addrs=False,
-            validate_input=False)
+            client_timeout=60)
+        dockerng_start.assert_called_with('cont')
 
     def test_running_compare_images_by_id(self):
         '''
@@ -271,6 +264,49 @@ class DockerngTestCase(TestCase):
                               "but there were no changes",
                               'name': 'image:latest',
                               })
+
+    def test_image_present_and_force(self):
+        '''
+        According following sls,
+
+        .. code-block:: yaml
+
+            image:latest:
+              dockerng.image_present:
+                - force: true
+
+        if ``image:latest`` is not downloaded and force is true
+        should pull a new image successfuly.
+        '''
+        dockerng_inspect_image = Mock(
+            side_effect=CommandExecutionError(
+                'Error 404: No such image/container: image:latest'))
+        dockerng_pull = Mock(
+            return_value={'Layers':
+                          {'Already_Pulled': ['abcdefghijk'],
+                           'Pulled': ['abcdefghijk']},
+                          'Status': "Image 'image:latest' was pulled",
+                          'Time_Elapsed': 1.1})
+        dockerng_list_tags = Mock(
+            side_effect=[[], ['image:latest']]
+        )
+        __salt__ = {'dockerng.list_tags': dockerng_list_tags,
+                    'dockerng.pull': dockerng_pull,
+                    'dockerng.inspect_image': dockerng_inspect_image,
+                    }
+        with patch.dict(dockerng_state.__dict__,
+                        {'__salt__': __salt__}):
+            ret = dockerng_state.image_present('image:latest', force=True)
+        self.assertEqual(ret,
+                         {'changes': {
+                             'Layers': {'Already_Pulled': ['abcdefghijk'],
+                                        'Pulled': ['abcdefghijk']},
+                             'Status': "Image 'image:latest' was pulled",
+                             'Time_Elapsed': 1.1},
+                             'result': True,
+                             'comment': "Image 'image:latest' was pulled",
+                             'name': 'image:latest',
+                         })
 
     def test_check_start_false(self):
         '''
@@ -386,9 +422,242 @@ class DockerngTestCase(TestCase):
                 self.assertEqual(ret,
                                  {'changes': {},
                                   'comment': 'Environment values must'
-                                  ' be strings KEY={0!r}'.format(wrong_value),
+                                  ' be strings KEY=\'{0}\''.format(wrong_value),
                                   'name': 'cont',
                                   'result': False})
+
+    def test_running_with_labels(self):
+        '''
+        Test dockerng.running with labels parameter.
+        '''
+        dockerng_create = Mock()
+        __salt__ = {'dockerng.list_containers': MagicMock(),
+                    'dockerng.list_tags': MagicMock(),
+                    'dockerng.pull': MagicMock(),
+                    'dockerng.state': MagicMock(),
+                    'dockerng.inspect_image': MagicMock(),
+                    'dockerng.create': dockerng_create,
+                    }
+        with patch.dict(dockerng_state.__dict__,
+                        {'__salt__': __salt__}):
+            dockerng_state.running(
+                'cont',
+                image='image:latest',
+                labels=['LABEL1', 'LABEL2'],
+                )
+        dockerng_create.assert_called_with(
+            'image:latest',
+            validate_input=False,
+            validate_ip_addrs=False,
+            name='cont',
+            labels=['LABEL1', 'LABEL2'],
+            client_timeout=60)
+
+    def test_network_present(self):
+        '''
+        Test dockerng.network_present
+        '''
+        dockerng_create_network = Mock(return_value='created')
+        dockerng_connect_container_to_network = Mock(return_value='connected')
+        __salt__ = {'dockerng.create_network': dockerng_create_network,
+                    'dockerng.connect_container_to_network': dockerng_connect_container_to_network,
+                    'dockerng.networks': Mock(return_value=[]),
+                    }
+        with patch.dict(dockerng_state.__dict__,
+                        {'__salt__': __salt__}):
+            ret = dockerng_state.network_present(
+                'network_foo',
+                containers=['container'],
+                )
+        dockerng_create_network.assert_called_with('network_foo', driver=None)
+        dockerng_connect_container_to_network.assert_called_with('container',
+                                                                 'network_foo')
+        self.assertEqual(ret, {'name': 'network_foo',
+                               'comment': '',
+                               'changes': {'connected': 'connected',
+                                           'created': 'created'},
+                               'result': True})
+
+    def test_network_absent(self):
+        '''
+        Test dockerng.network_absent
+        '''
+        dockerng_remove_network = Mock(return_value='removed')
+        dockerng_disconnect_container_from_network = Mock(return_value='disconnected')
+        __salt__ = {'dockerng.remove_network': dockerng_remove_network,
+                    'dockerng.disconnect_container_from_network': dockerng_disconnect_container_from_network,
+                    'dockerng.networks': Mock(return_value=[{'Containers': {'container': {}}}]),
+                    }
+        with patch.dict(dockerng_state.__dict__,
+                        {'__salt__': __salt__}):
+            ret = dockerng_state.network_absent(
+                'network_foo',
+                )
+        dockerng_disconnect_container_from_network.assert_called_with('container',
+                                                                      'network_foo')
+        dockerng_remove_network.assert_called_with('network_foo')
+        self.assertEqual(ret, {'name': 'network_foo',
+                               'comment': '',
+                               'changes': {'disconnected': 'disconnected',
+                                           'removed': 'removed'},
+                               'result': True})
+
+    def test_volume_present(self):
+        '''
+        Test dockerng.volume_present
+        '''
+        volumes = []
+        default_driver = 'dummy_default'
+
+        def create_volume(name, driver=None, driver_opts=None):
+            for v in volumes:
+                # volume_present should never try to add a conflicting
+                # volume
+                self.assertNotEqual(v['Name'], name)
+            if driver is None:
+                driver = default_driver
+            new = {'Name': name, 'Driver': driver}
+            volumes.append(new)
+            return new
+
+        def remove_volume(name):
+            old_len = len(volumes)
+            removed = [v for v in volumes if v['Name'] == name]
+            # volume_present should not have tried to remove a volume
+            # that didn't exist
+            self.assertEqual(1, len(removed))
+            volumes.remove(removed[0])
+            return removed[0]
+
+        dockerng_create_volume = Mock(side_effect=create_volume)
+        __salt__ = {'dockerng.create_volume': dockerng_create_volume,
+                    'dockerng.volumes': Mock(return_value={'Volumes': volumes}),
+                    'dockerng.remove_volume': Mock(side_effect=remove_volume),
+                    }
+        with patch.dict(dockerng_state.__dict__,
+                        {'__salt__': __salt__}):
+            ret = dockerng_state.volume_present(
+                'volume_foo',
+                )
+            dockerng_create_volume.assert_called_with('volume_foo',
+                                                      driver=None,
+                                                      driver_opts=None)
+            self.assertEqual(
+                {
+                    'name': 'volume_foo',
+                    'comment': '',
+                    'changes': {
+                        'created': {
+                            'Driver': default_driver,
+                            'Name': 'volume_foo',
+                        },
+                    },
+                    'result': True,
+                },
+                ret)
+            self.assertEqual(len(volumes), 1)
+            self.assertEqual(volumes[0]['Name'], 'volume_foo')
+            self.assertIs(volumes[0]['Driver'], default_driver)
+
+            # run it again with the same arguments
+            orig_volumes = [volumes[0].copy()]
+            ret = dockerng_state.volume_present('volume_foo')
+            self.assertEqual(
+                {
+                    'name': 'volume_foo',
+                    'comment': "Volume 'volume_foo' already exists.",
+                    'changes': {},
+                    'result': True,
+                },
+                ret)
+            self.assertEqual(orig_volumes, volumes)
+
+            # run it again with a different driver but don't force
+            ret = dockerng_state.volume_present('volume_foo', driver='local')
+            self.assertEqual(
+                {
+                    'name': 'volume_foo',
+                    'comment': ("Driver for existing volume 'volume_foo'"
+                                " ('dummy_default') does not match specified"
+                                " driver ('local') and force is False"),
+                    'changes': {},
+                    'result': False,
+                },
+                ret)
+            self.assertEqual(orig_volumes, volumes)
+
+            # run it again with a different driver and force
+            ret = dockerng_state.volume_present(
+                'volume_foo', driver='local', force=True)
+            self.assertEqual(
+                {
+                    'name': 'volume_foo',
+                    'comment': "",
+                    'changes': {
+                        'removed': {
+                            'Driver': default_driver,
+                            'Name': 'volume_foo',
+                        },
+                        'created': {
+                            'Driver': 'local',
+                            'Name': 'volume_foo',
+                        },
+                    },
+                    'result': True,
+                },
+                ret)
+            mod_orig_volumes = [orig_volumes[0].copy()]
+            mod_orig_volumes[0]['Driver'] = 'local'
+            self.assertEqual(mod_orig_volumes, volumes)
+
+    def test_volume_present_with_another_driver(self):
+        '''
+        Test dockerng.volume_present
+        '''
+        dockerng_create_volume = Mock(return_value='created')
+        dockerng_remove_volume = Mock(return_value='removed')
+        __salt__ = {'dockerng.create_volume': dockerng_create_volume,
+                    'dockerng.remove_volume': dockerng_remove_volume,
+                    'dockerng.volumes': Mock(return_value={
+                        'Volumes': [{'Name': 'volume_foo',
+                                     'Driver': 'foo'}]}),
+                    }
+        with patch.dict(dockerng_state.__dict__,
+                        {'__salt__': __salt__}):
+            ret = dockerng_state.volume_present(
+                'volume_foo',
+                driver='bar',
+                force=True,
+                )
+        dockerng_remove_volume.assert_called_with('volume_foo')
+        dockerng_create_volume.assert_called_with('volume_foo',
+                                                  driver='bar',
+                                                  driver_opts=None)
+        self.assertEqual(ret, {'name': 'volume_foo',
+                               'comment': '',
+                               'changes': {'created': 'created',
+                                           'removed': 'removed'},
+                               'result': True})
+
+    def test_volume_absent(self):
+        '''
+        Test dockerng.volume_absent
+        '''
+        dockerng_remove_volume = Mock(return_value='removed')
+        __salt__ = {'dockerng.remove_volume': dockerng_remove_volume,
+                    'dockerng.volumes': Mock(return_value={
+                        'Volumes': [{'Name': 'volume_foo'}]}),
+                    }
+        with patch.dict(dockerng_state.__dict__,
+                        {'__salt__': __salt__}):
+            ret = dockerng_state.volume_absent(
+                'volume_foo',
+                )
+        dockerng_remove_volume.assert_called_with('volume_foo')
+        self.assertEqual(ret, {'name': 'volume_foo',
+                               'comment': '',
+                               'changes': {'removed': 'removed'},
+                               'result': True})
 
 
 if __name__ == '__main__':

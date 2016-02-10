@@ -17,6 +17,7 @@ This state is useful for sending messages to Slack during state runs.
         - api_key: peWcBiMOS9HrZG15peWcBiMOS9HrZG15
 
 The api key can be specified in the master or minion configuration like below:
+
 .. code-block:: yaml
 
     slack:
@@ -36,7 +37,8 @@ def post_message(name,
                  channel,
                  from_name,
                  message,
-                 api_key=None):
+                 api_key=None,
+                 icon=None):
     '''
     Send a message to a Slack channel.
 
@@ -69,6 +71,8 @@ def post_message(name,
         The api key for Slack to use for authentication,
         if not specified in the configuration options of master or minion.
 
+    icon
+        URL to an image to use as the icon for this message
     '''
     ret = {'name': name,
            'changes': {},
@@ -97,6 +101,7 @@ def post_message(name,
         message=message,
         from_name=from_name,
         api_key=api_key,
+        icon=icon,
     )
 
     if result:

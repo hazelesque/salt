@@ -84,8 +84,22 @@ The option can can also be set to a list of masters, enabling
 
 Default: ``str``
 
-The type of the :conf_minion:`master` variable. Can be either ``func`` or
-``failover``.
+The type of the :conf_minion:`master` variable. Can be ``str``, ``failover`` or
+``func``.
+
+.. code-block:: yaml
+
+    master_type: failover
+
+If this option is set to ``failover``, :conf_minion:`master` must be a list of
+master addresses. The minion will then try each master in the order specified
+in the list until it successfully connects.  :conf_minion:`master_alive_interval`
+must also be set, this determines how often the minion will verify the presence
+of the master.
+
+.. code-block:: yaml
+
+    master_type: func
 
 If the master needs to be dynamically assigned by executing a function instead
 of reading in the static master value, set this to ``func``. This can be used
@@ -93,19 +107,16 @@ to manage the minion's master setting from an execution module. By simply
 changing the algorithm in the module to return a new master ip/fqdn, restart
 the minion and it will connect to the new master.
 
+``master_alive_interval``
+-------------------------
 
 .. code-block:: yaml
 
-    master_type: func
+    master_alive_interval: 30
 
-If this option is set to ``failover``, :conf_minion:`master` must be a list of
-master addresses. The minion will then try each master in the order specified
-in the list until it successfully connects.
-
-
-.. code-block:: yaml
-
-    master_type: failover
+Configures how often, in seconds, the minion will verify that the current
+master is alive and responding.  The minion will try to establish a connection
+to the next master in the list if it finds the existing one is dead.
 
 ``master_shuffle``
 ------------------
@@ -114,13 +125,26 @@ in the list until it successfully connects.
 
 Default: ``False``
 
-If :conf_minion:`master` is a list of addresses, shuffle them before trying to
+If :conf_minion:`master` is a list of addresses and :conf_minion`master_type` is ``failover``, shuffle them before trying to
 connect to distribute the minions over all available masters. This uses
 Python's :func:`random.shuffle <python2:random.shuffle>` method.
 
 .. code-block:: yaml
 
     master_shuffle: True
+
+``random_master``
+------------------
+
+Default: ``False``
+
+If :conf_minion:`master` is a list of addresses, shuffle them before trying to
+connect to distribute the minions over all available masters. This uses
+Python's :func:`random.randint <python2:random.randint>` method.
+
+.. code-block:: yaml
+
+    random_master: True
 
 .. conf_minion:: retry_dns
 
@@ -134,7 +158,7 @@ the master hostname if name resolution fails. Defaults to 30 seconds.
 Set to zero if the minion should shutdown and not retry.
 
 .. code-block:: yaml
-    
+
     retry_dns: 30
 
 .. conf_minion:: master_port
@@ -184,6 +208,21 @@ need to be changed to the ownership of the new user.
 
     sudo_user: root
 
+.. conf_minion:: sudo_user
+
+``sudo_user``
+-------------
+
+Default: ``''``
+
+Setting ``sudo_user`` will cause salt to run all execution modules under an
+sudo to the user given in ``sudo_user``.  The user under which the salt minion
+process itself runs will still be that provided in :conf_minion:`user` above,
+but all execution modules run by the minion will be rerouted through sudo.
+
+.. code-block:: yaml
+
+    sudo_user: saltadm
 
 .. conf_minion:: pidfile
 
@@ -313,6 +352,86 @@ executed. By default this feature is disabled, to enable set cache_jobs to
 
     cache_jobs: False
 
+.. conf_minion:: minion_pillar_cache
+
+``minion_pillar_cache``
+-----------------------
+
+Default: ``False``
+
+The minion can locally cache rendered pillar data under
+:conf_minion:`cachedir`/pillar. This allows a temporarily disconnected minion
+to access previously cached pillar data by invoking salt-call with the --local
+and --pillar_root=:conf_minion:`cachedir`/pillar options. Before enabling this
+setting consider that the rendered pillar may contain security sensitive data.
+Appropriate access restrictions should be in place. By default the saved pillar
+data will be readable only by the user account running salt. By default this
+feature is disabled, to enable set minion_pillar_cache to ``True``.
+
+.. code-block:: yaml
+
+    minion_pillar_cache: False
+
+.. conf_minion:: grains_cache
+
+``grains_cache``
+----------------
+
+Default: ``False``
+
+The minion can locally cache grain data instead of refreshing the data
+each time the grain is referenced. By default this feature is disabled,
+to enable set grains_cache to ``True``.
+
+.. code-block:: yaml
+
+    grains_cache: False
+
+
+.. conf_minion:: grains_deep_merge
+
+``grains_deep_merge``
+---------------------
+
+.. versionadded:: Boron
+
+Default: ``False``
+
+The grains can be merged, instead of overridden, using this option.
+This allows custom grains to defined different subvalues of a dictionary
+grain. By default this feature is disabled, to enable set grains_deep_merge
+to ``True``.
+
+.. code-block:: yaml
+
+    grains_deep_merge: False
+
+For example, with these custom grains functions:
+
+.. code-block:: python
+
+    def custom1_k1():
+        return {'custom1': {'k1': 'v1'}}
+
+    def custom1_k2():
+        return {'custom1': {'k2': 'v2'}}
+
+Without ``grains_deep_merge``, the result would be:
+
+.. code-block:: yaml
+
+    custom1:
+      k1: v1
+
+With ``grains_deep_merge``, the result will be:
+
+.. code-block:: yaml
+
+    custom1:
+      k1: v1
+      k2: v2
+
+
 .. conf_minion:: sock_dir
 
 ``sock_dir``
@@ -439,20 +558,34 @@ behavior is to have time-frame within all minions try to reconnect.
 
     recon_randomize: True
 
-.. conf_minion:: dns_check
+.. conf_minion:: return_retry_timer
 
-``dns_check``
--------------
+``return_retry_timer``
+----------------------
 
-Default: ``True``
+Default: ``5``
 
-When healing, a dns_check is run. This is to make sure that the originally
-resolved dns has not changed. If this is something that does not happen in your
-environment, set this value to ``False``.
+The default timeout for a minion return attempt.
 
 .. code-block:: yaml
 
-    dns_check: True
+    return_retry_timer: 5
+
+
+.. conf_minion:: return_retry_timer_max
+
+``return_retry_timer_max``
+--------------------------
+
+Default: ``10``
+
+The maximum timeout for a minion return attempt. If non-zero the minion return
+retry timeout will be a random int beween ``return_retry_timer`` and
+``return_retry_timer_max``
+
+.. code-block:: yaml
+
+    return_retry_timer_max: 10
 
 .. conf_minion:: cache_sreqs
 
@@ -526,7 +659,7 @@ be able to execute a certain module. The sys module is built into the minion
 and cannot be disabled.
 
 This setting can also tune the minion, as all modules are loaded into ram
-disabling modules will lover the minion's ram footprint.
+disabling modules will lower the minion's ram footprint.
 
 .. code-block:: yaml
 
@@ -633,6 +766,23 @@ This setting requires that ``gcc`` and ``cython`` are installed on the minion
 .. code-block:: yaml
 
     cython_enable: False
+
+.. conf_minion:: enable_zip_modules
+
+``enable_zip_modules``
+----------------------
+
+.. versionadded:: 2015.8.0
+
+Default: ``False``
+
+Set this value to true to enable loading of zip archives as extension modules.
+This allows for packing module code with specific dependencies to avoid conflicts
+and/or having to install specific modules' dependencies in system libraries.
+
+.. code-block:: yaml
+
+    enable_zip_modules: False
 
 .. conf_minion:: providers
 
@@ -864,6 +1014,21 @@ minion to clean the keys.
 
     open_mode: False
 
+.. conf_minion:: master_finger
+
+``master_finger``
+-----------------
+
+Default: ``''``
+
+Fingerprint of the master public key to validate the identity of your Salt master
+before the initial key exchange. The master fingerprint can be found by running
+"salt-key -F master" on the Salt master.
+
+.. code-block:: yaml
+
+   master_finger: 'ba:30:65:2a:d6:9e:20:4f:d8:b2:f3:a7:d4:65:11:13'
+
 .. conf_minion:: verify_master_pubkey_sign
 
 
@@ -927,8 +1092,11 @@ Thread Settings
 
 Default: ``True``
 
-Disable multiprocessing support by default when a minion receives a
+If `multiprocessing` is enabled when a minion receives a
 publication a new process is spawned and the command is executed therein.
+Conversely, if `multiprocessing` is disabled the new publication will be run
+executed in a thread.
+
 
 .. code-block:: yaml
 
@@ -967,13 +1135,12 @@ Examples:
     log_file: udp://loghost:10514
 
 
-
 .. conf_minion:: log_level
 
 ``log_level``
 -------------
 
-Default: ``warning``
+Default: ``info``
 
 The level of messages to send to the console. See also :conf_log:`log_level`.
 
@@ -982,14 +1149,12 @@ The level of messages to send to the console. See also :conf_log:`log_level`.
     log_level: warning
 
 
-
-
 .. conf_minion:: log_level_logfile
 
 ``log_level_logfile``
 ---------------------
 
-Default: ``warning``
+Default: ``info``
 
 The level of messages to send to the log file. See also
 :conf_log:`log_level_logfile`. When it is not set explicitly
@@ -998,7 +1163,6 @@ it will inherit the level set by :conf_log:`log_level` option.
 .. code-block:: yaml
 
     log_level_logfile: warning
-
 
 
 .. conf_minion:: log_datefmt
@@ -1016,8 +1180,6 @@ The date and time format used in console log messages. See also
     log_datefmt: '%H:%M:%S'
 
 
-
-
 .. conf_minion:: log_datefmt_logfile
 
 ``log_datefmt_logfile``
@@ -1033,7 +1195,6 @@ The date and time format used in log file messages. See also
     log_datefmt_logfile: '%Y-%m-%d %H:%M:%S'
 
 
-
 .. conf_minion:: log_fmt_console
 
 ``log_fmt_console``
@@ -1044,10 +1205,27 @@ Default: ``[%(levelname)-8s] %(message)s``
 The format of the console logging messages. See also
 :conf_log:`log_fmt_console`.
 
+.. note::
+    Log colors are enabled in ``log_fmt_console`` rather than the
+    :conf_minion:`color` config since the logging system is loaded before the
+    minion config.
+
+    Console log colors are specified by these additional formatters:
+
+    %(colorlevel)s
+    %(colorname)s
+    %(colorprocess)s
+    %(colormsg)s
+
+    Since it is desirable to include the surrounding brackets, '[' and ']', in
+    the coloring of the messages, these color formatters also include padding
+    as well.  Color LogRecord attributes are only available for console
+    logging.
+
 .. code-block:: yaml
 
+    log_fmt_console: '%(colorlevel)s %(colormsg)s'
     log_fmt_console: '[%(levelname)-8s] %(message)s'
-
 
 
 .. conf_minion:: log_fmt_logfile
@@ -1065,7 +1243,6 @@ The format of the log file logging messages. See also
     log_fmt_logfile: '%(asctime)s,%(msecs)03.0f [%(name)-17s][%(levelname)-8s] %(message)s'
 
 
-
 .. conf_minion:: log_granular_levels
 
 ``log_granular_levels``
@@ -1076,7 +1253,31 @@ Default: ``{}``
 This can be used to control logging levels more specifically. See also
 :conf_log:`log_granular_levels`.
 
+.. conf_minion:: zmq_monitor
 
+``zmq_monitor``
+---------------
+
+Default: ``False``
+
+To diagnose issues with minions disconnecting or missing returns, ZeroMQ
+supports the use of monitor sockets to log connection events. This
+feature requires ZeroMQ 4.0 or higher.
+
+To enable ZeroMQ monitor sockets, set 'zmq_monitor' to 'True' and log at a
+debug level or higher.
+
+A sample log event is as follows:
+
+.. code-block:: yaml
+
+    [DEBUG   ] ZeroMQ event: {'endpoint': 'tcp://127.0.0.1:4505', 'event': 512,
+    'value': 27, 'description': 'EVENT_DISCONNECTED'}
+
+All events logged will include the string ``ZeroMQ event``. A connection event
+should be logged as the minion starts up and initially connects to the
+master. If not, check for debug log level and that the necessary version of
+ZeroMQ is installed.
 
 .. conf_minion:: failhard
 
@@ -1087,7 +1288,6 @@ Default: ``False``
 
 Set the global failhard flag, this informs all states to stop running states
 at the moment a single state fails
-
 
 
 .. code-block:: yaml
@@ -1173,3 +1373,85 @@ have other services that need to go with it.
 .. code-block:: yaml
 
     update_restart_services: ['salt-minion']
+
+
+.. _winrepo-minion-config-opts:
+
+Standalone Minion Windows Software Repo Settings
+================================================
+
+.. important::
+    To use these config options, the minion must be running in masterless mode
+    (set :conf_minion:`file_client` to ``local``).
+
+.. conf_minion:: winrepo_dir
+.. conf_minion:: win_repo
+
+``winrepo_dir``
+---------------
+
+.. versionchanged:: 2015.8.0
+    Renamed from ``win_repo`` to ``winrepo_dir``. Also, this option did not
+    have a default value until this version.
+
+Default: ``C:\salt\srv\salt\win\repo``
+
+Location on the minion where the :conf_minion:`winrepo_remotes` are checked
+out.
+
+.. code-block:: yaml
+
+    winrepo_dir: 'D:\winrepo'
+
+.. conf_minion:: winrepo_cachefile
+.. conf_minion:: win_repo_cachefile
+
+``winrepo_cachefile``
+---------------------
+
+.. versionchanged:: 2015.8.0
+    Renamed from ``win_repo_cachefile`` to ``winrepo_cachefile``. Also,
+    this option did not have a default value until this version.
+
+Default: ``winrepo.p``
+
+Path relative to :conf_minion:`winrepo_dir` where the winrepo cache should be
+created.
+
+.. code-block:: yaml
+
+    winrepo_cachefile: winrepo.p
+
+.. conf_minion:: winrepo_remotes
+.. conf_minion:: win_gitrepos
+
+``winrepo_remotes``
+-------------------
+
+.. versionchanged:: 2015.8.0
+    Renamed from ``win_gitrepos`` to ``winrepo_remotes``. Also, this option did
+    not have a default value until this version.
+
+
+.. versionadded:: 2015.8.0
+
+Default: ``['https://github.com/saltstack/salt-winrepo.git']``
+
+List of git repositories to checkout and include in the winrepo
+
+.. code-block:: yaml
+
+    winrepo_remotes:
+      - https://github.com/saltstack/salt-winrepo.git
+
+To specify a specific revision of the repository, prepend a commit ID to the
+URL of the the repository:
+
+.. code-block:: yaml
+
+    winrepo_remotes:
+      - '<commit_id> https://github.com/saltstack/salt-winrepo.git'
+
+Replace ``<commit_id>`` with the SHA1 hash of a commit ID. Specifying a commit
+ID is useful in that it allows one to revert back to a previous version in the
+event that an error is introduced in the latest revision of the repo.

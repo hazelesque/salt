@@ -103,6 +103,7 @@ class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         self.assertNotEqual(0, retcode)
 
     @skipIf(sys.platform.startswith('win'), 'This test does not apply on Win')
+    @skipIf(True, 'to be reenabled when #23623 is merged')
     def test_return(self):
         self.run_call('cmd.run "echo returnTOmaster"')
         jobs = [a for a in self.run_run('jobs.list_jobs')]
@@ -155,7 +156,8 @@ class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
             'open_mode': True,
             'log_file': logfile,
             'log_level': 'quiet',
-            'log_level_logfile': 'info'
+            'log_level_logfile': 'info',
+            'transport': self.master_opts['transport'],
         }
 
         # Remove existing logfile
@@ -296,7 +298,7 @@ class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
             )
             self.assertEqual(ret[2], 2)
         finally:
-            os.chdir(old_cwd)
+            self.chdir(old_cwd)
             if os.path.isdir(config_dir):
                 shutil.rmtree(config_dir)
 
@@ -306,7 +308,7 @@ class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
             # Let's create an initial output file with some data
             ret = self.run_script(
                 'salt-call',
-                '-c {0} --output-file={1} -g'.format(
+                '-c {0} --output-file={1} test.versions'.format(
                     self.get_config_dir(),
                     output_file_append
                 ),
@@ -319,7 +321,7 @@ class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
 
             self.run_script(
                 'salt-call',
-                '-c {0} --output-file={1} --output-file-append -g'.format(
+                '-c {0} --output-file={1} --output-file-append test.versions'.format(
                     self.get_config_dir(),
                     output_file_append
                 ),

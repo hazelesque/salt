@@ -74,7 +74,7 @@ Job events
     :var minions: A list of minion IDs that Salt expects will return data for
         this job.
     :var user: The name of the user that ran the command as defined in Salt's
-        Client ACL or external auth.
+        Publisher ACL or external auth.
 
 .. salt:event:: salt/job/<JID>/ret/<MID>
 
@@ -85,6 +85,15 @@ Job events
     :var retcode: The return code for the job.
     :var fun: The function the minion ran. E.g., ``test.ping``.
     :var return: The data returned from the execution module.
+
+.. salt:event:: salt/job/<JID>/prog/<MID>/<RUN NUM>
+
+    Fired each time a each function in a state run completes execution. Must be
+    enabled using the :conf_master:`state_events` option.
+
+    :var data: The data returned from the state module function.
+    :var id: The minion ID.
+    :var jid: The job ID.
 
 .. _event-master_presence:
 

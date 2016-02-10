@@ -47,6 +47,14 @@ if HAS_PIP is True:
         del pip
         if 'pip' in sys.modules:
             del sys.modules['pip']
+
+    ver = getattr(pip, '__version__', '0.0.0').split('.')
+    pip_ver = tuple([int(x) for x in ver if x.isdigit()])
+    if pip_ver >= (8, 0, 0):
+        from pip.exceptions import InstallationError
+    else:
+        InstallationError = ValueError
+
 # pylint: enable=import-error
 
 logger = logging.getLogger(__name__)
@@ -59,7 +67,7 @@ def __virtual__():
     '''
     Only load if the pip module is available in __salt__
     '''
-    if HAS_PIP and 'pip.list' in __salt__:
+    if 'pip.list' in __salt__:
         return __virtualname__
     return False
 
@@ -100,6 +108,16 @@ def _check_pkg_version_format(pkg):
 
     ret = {'result': False, 'comment': None,
            'prefix': None, 'version_spec': None}
+
+    if not HAS_PIP:
+        ret['comment'] = (
+            'An importable pip module is required but could not be found on '
+            'your system. This usually means that the system\'s pip package '
+            'is not installed properly.'
+        )
+
+        return ret
+
     from_vcs = False
     try:
         # Get the requirement object from the pip library
@@ -125,7 +143,7 @@ def _check_pkg_version_format(pkg):
                         break
             else:
                 install_req = pip.req.InstallRequirement.from_line(pkg)
-    except ValueError as exc:
+    except (ValueError, InstallationError) as exc:
         ret['result'] = False
         if not from_vcs and '=' in pkg and '==' not in pkg:
             ret['comment'] = (
@@ -163,7 +181,7 @@ def _check_if_installed(prefix, state_pkg_name, version_spec,
     # result: False means the package is not installed
     ret = {'result': False, 'comment': None}
 
-    # Check if the requested packated is already installed.
+    # Check if the requested package is already installed.
     try:
         pip_list = __salt__['pip.list'](prefix, bin_env=bin_env,
                                         user=user, cwd=cwd)
@@ -235,7 +253,9 @@ def installed(name,
               allow_unverified=None,
               process_dependency_links=False,
               env_vars=None,
-              use_vt=False):
+              use_vt=False,
+              trusted_host=None,
+              no_cache_dir=False):
     '''
     Make sure the package is installed
 
@@ -342,6 +362,9 @@ def installed(name,
         When user is given, do not attempt to copy and chown
         a requirements file
 
+    no_cache_dir:
+        Disable the cache.
+
     cwd
         Current working directory to run pip from
 
@@ -351,7 +374,7 @@ def installed(name,
 
         .. deprecated:: 2014.7.2
             If `bin_env` is given, pip will already be sourced from that
-            virualenv, making `activate` effectively a noop.
+            virtualenv, making `activate` effectively a noop.
 
     pre_releases
         Include pre-releases in the available versions
@@ -379,10 +402,25 @@ def installed(name,
     env_vars
         Add or modify environment variables. Useful for tweaking build steps,
         such as specifying INCLUDE or LIBRARY paths in Makefiles, build scripts or
-        compiler calls.
+        compiler calls.  This must be in the form of a dictionary or a mapping.
+
+        Example:
+
+        .. code-block:: yaml
+
+            django:
+              pip.installed:
+                - name: django_app
+                - env_vars:
+                    CUSTOM_PATH: /opt/django_app
+                    VERBOSE: True
 
     use_vt
-        Use VT terminal emulation (see ouptut while installing)
+        Use VT terminal emulation (see output while installing)
+
+    trusted_host
+        Mark this host as trusted, even though it does not have valid or any
+        HTTPS.
 
     Example:
 
@@ -484,7 +522,13 @@ def installed(name,
         bin_env = env
 
     # If pkgs is present, ignore name
-    if not pkgs:
+    if pkgs:
+        if not isinstance(pkgs, list):
+            return {'name': name,
+                    'result': False,
+                    'changes': {},
+                    'comment': 'pkgs argument must be formatted as a list'}
+    else:
         pkgs = [name]
 
     # Assumption: If `pkg` is not an `string`, it's a `collections.OrderedDict`
@@ -559,7 +603,6 @@ def installed(name,
     target_pkgs = []
     already_installed_comments = []
     if requirements or editable:
-        name = ''
         comments = []
         # Append comments if this is a dry run.
         if __opts__['test']:
@@ -588,6 +631,12 @@ def installed(name,
                 out = _check_if_installed(prefix, state_pkg_name, version_spec,
                                           ignore_installed, force_reinstall,
                                           upgrade, user, cwd, bin_env)
+                # If _check_if_installed result is None, something went wrong with
+                # the command running. This way we keep stateful output.
+                if out['result'] is None:
+                    ret['result'] = False
+                    ret['comment'] = out['comment']
+                    return ret
             else:
                 out = {'result': False, 'comment': None}
 
@@ -663,10 +712,17 @@ def installed(name,
         process_dependency_links=process_dependency_links,
         saltenv=__env__,
         env_vars=env_vars,
-        use_vt=use_vt
+        use_vt=use_vt,
+        trusted_host=trusted_host,
+        no_cache_dir=no_cache_dir
     )
 
-    if pip_install_call and (pip_install_call.get('retcode', 1) == 0):
+    # Check the retcode for success, but don't fail if using pip1 and the package is
+    # already present. Pip1 returns a retcode of 1 (instead of 0 for pip2) if you run
+    # "pip install" without any arguments. See issue #21845.
+    if pip_install_call and \
+            (pip_install_call.get('retcode', 1) == 0 or pip_install_call.get('stdout', '').startswith(
+                'You must give at least one requirement to install')):
         ret['result'] = True
 
         if requirements or editable:
@@ -775,7 +831,7 @@ def removed(name,
     bin_env : None
         the pip executable or virtualenenv to use
     use_vt
-        Use VT terminal emulation (see ouptut while installing)
+        Use VT terminal emulation (see output while installing)
     '''
     ret = {'name': name, 'result': None, 'comment': '', 'changes': {}}
 
@@ -832,7 +888,7 @@ def uptodate(name,
     bin_env
         the pip executable or virtualenenv to use
     use_vt
-        Use VT terminal emulation (see ouptut while installing)
+        Use VT terminal emulation (see output while installing)
     '''
     ret = {'name': name,
            'changes': {},

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 '''
-Apache Traffic Server execution module
+Apache Traffic Server execution module.
+
+.. versionadded:: 2015.8.0
 
 ``traffic_line`` is used to execute individual Traffic Server commands and to
 script multiple commands in a shell.
@@ -20,7 +22,10 @@ log = logging.getLogger(__name__)
 
 
 def __virtual__():
-    return __virtualname__ if utils.which('traffic_line') else False
+    if utils.which('traffic_line'):
+        return __virtualname__
+    return (False, 'trafficserver execution module not loaded: '
+            'traffic_line command not found.')
 
 
 _TRAFFICLINE = utils.which('traffic_line')
@@ -33,7 +38,7 @@ def _subprocess(cmd):
 
     try:
         proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-        ret = proc.communicate()[0].strip()
+        ret = utils.to_str(proc.communicate()[0]).strip()
         retcode = proc.wait()
 
         if ret:

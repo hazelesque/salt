@@ -74,7 +74,7 @@ def __virtual__():
     Only load if boto libraries exist.
     '''
     if not HAS_BOTO:
-        return False
+        return (False, 'The boto_cloudwatch module cannot be loaded: boto libraries are unavailable.')
     __utils__['boto.assign_funcs'](__name__, 'cloudwatch',
                                    module='ec2.cloudwatch')
     return True
@@ -231,12 +231,25 @@ def create_or_update_alarm(
     if isinstance(ok_actions, string_types):
         ok_actions = ok_actions.split(",")
 
-    # convert action names into ARN's
-    alarm_actions = convert_to_arn(alarm_actions, region, key, keyid, profile)
-    insufficient_data_actions = convert_to_arn(
-        insufficient_data_actions, region, key, keyid, profile
-    )
-    ok_actions = convert_to_arn(ok_actions, region, key, keyid, profile)
+    # convert provided action names into ARN's
+    if alarm_actions:
+        alarm_actions = convert_to_arn(alarm_actions,
+                                       region=region,
+                                       key=key,
+                                       keyid=keyid,
+                                       profile=profile)
+    if insufficient_data_actions:
+        insufficient_data_actions = convert_to_arn(insufficient_data_actions,
+                                                   region=region,
+                                                   key=key,
+                                                   keyid=keyid,
+                                                   profile=profile)
+    if ok_actions:
+        ok_actions = convert_to_arn(ok_actions,
+                                    region=region,
+                                    key=key,
+                                    keyid=keyid,
+                                    profile=profile)
 
     conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
 

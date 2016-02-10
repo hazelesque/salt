@@ -92,7 +92,6 @@ import stat
 import shutil
 import sys
 import time
-import shlex
 from subprocess import Popen, PIPE
 try:
     import grp
@@ -158,7 +157,7 @@ def _parse_interval(value):
     '''
     match = _INTERVAL_REGEX.match(str(value))
     if match is None:
-        raise ValueError('invalid time interval: {0!r}'.format(value))
+        raise ValueError('invalid time interval: \'{0}\''.format(value))
 
     result = 0
     resolution = None
@@ -559,8 +558,8 @@ class ExecOption(Option):
     def execute(self, fullpath, fstat, test=False):
         try:
             command = self.command.replace('{}', fullpath)
-            print(shlex.split(command))
-            p = Popen(shlex.split(command),
+            print(salt.utils.shlex_split(command))
+            p = Popen(salt.utils.shlex_split(command),
                       stdout=PIPE,
                       stderr=PIPE)
             (out, err) = p.communicate()
@@ -568,8 +567,8 @@ class ExecOption(Option):
                 log.error(
                     'Error running command: {0}\n\n{1}'.format(
                     command,
-                    err))
-            return "{0}:\n{1}\n".format(command, out)
+                    salt.utils.to_str(err)))
+            return "{0}:\n{1}\n".format(command, salt.utils.to_str(out))
 
         except Exception as e:
             log.error(
@@ -633,31 +632,31 @@ class Finder(object):
         '''
         for dirpath, dirs, files in os.walk(path):
             depth = dirpath[len(path) + len(os.path.sep):].count(os.path.sep)
+            if depth >= self.mindepth:
+                for name in dirs + files:
+                    fstat = None
+                    matches = True
+                    fullpath = None
+                    for criterion in self.criteria:
+                        if fstat is None and criterion.requires() & _REQUIRES_STAT:
+                            fullpath = os.path.join(dirpath, name)
+                            fstat = os.stat(fullpath)
+                        if not criterion.match(dirpath, name, fstat):
+                            matches = False
+                            break
+                    if matches:
+                        if fullpath is None:
+                            fullpath = os.path.join(dirpath, name)
+                        for action in self.actions:
+                            if (fstat is None and
+                                    action.requires() & _REQUIRES_STAT):
+                                fstat = os.stat(fullpath)
+                            result = action.execute(fullpath, fstat, test=self.test)
+                            if result is not None:
+                                yield result
+
             if depth == self.maxdepth:
                 dirs[:] = []
-            else:
-                if depth >= self.mindepth:
-                    for name in dirs + files:
-                        fstat = None
-                        matches = True
-                        fullpath = None
-                        for criterion in self.criteria:
-                            if fstat is None and criterion.requires() & _REQUIRES_STAT:
-                                fullpath = os.path.join(dirpath, name)
-                                fstat = os.stat(fullpath)
-                            if not criterion.match(dirpath, name, fstat):
-                                matches = False
-                                break
-                        if matches:
-                            if fullpath is None:
-                                fullpath = os.path.join(dirpath, name)
-                            for action in self.actions:
-                                if (fstat is None and
-                                    action.requires() & _REQUIRES_STAT):
-                                    fstat = os.stat(fullpath)
-                                result = action.execute(fullpath, fstat, test=self.test)
-                                if result is not None:
-                                    yield result
 
 
 def find(path, options):

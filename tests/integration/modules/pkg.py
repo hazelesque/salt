@@ -47,17 +47,21 @@ class PkgModuleTest(integration.ModuleCase,
     @destructiveTest
     def test_mod_del_repo(self):
         '''
-        test modifying a software repository
+        test modifying and deleting a software repository
         '''
         func = 'pkg.mod_repo'
         os_grain = self.run_function('grains.item', ['os'])['os']
+        os_release_info = tuple(self.run_function('grains.item', ['osrelease_info'])['osrelease_info'])
 
-        if os_grain == 'Ubuntu':
+        if os_grain == 'Ubuntu' and os_release_info < (15, 10):
             repo = 'ppa:saltstack/salt'
             uri = 'http://ppa.launchpad.net/saltstack/salt/ubuntu'
             ret = self.run_function(func, [repo, 'comps=main'])
             self.assertNotEqual(ret, {})
-            self.assertIn(uri, ret.keys()[0])
+            if os_release_info[0] == 12:
+                self.assertIn(repo, ret)
+            else:
+                self.assertIn(uri, ret.keys()[0])
 
             self.run_function('pkg.del_repo', [repo])
         else:
@@ -85,6 +89,13 @@ class PkgModuleTest(integration.ModuleCase,
         '''
         pkg = 'htop'
         version = self.run_function('pkg.version', [pkg])
+        os_grain = self.run_function('grains.item', ['os'])['os']
+        os_release = self.run_function('grains.item', ['osrelease'])['osrelease']
+
+        if os_grain == 'Ubuntu':
+            if os_release.startswith('12.'):
+                self.skipTest('pkg.install and pkg.remove do not work on ubuntu '
+                              '12 when run from the test suite')
 
         def test_install():
             install_ret = self.run_function('pkg.install', [pkg])
@@ -107,16 +118,37 @@ class PkgModuleTest(integration.ModuleCase,
         '''
         test holding and unholding a package
         '''
-        func = 'pkg.hold'
         pkg = 'htop'
         os_family = self.run_function('grains.item', ['os_family'])['os_family']
+        os_major_release = self.run_function('grains.item', ['osmajorrelease'])['osmajorrelease']
+        available = self.run_function('sys.doc', ['pkg.hold'])
 
         if os_family == 'RedHat':
-            self.run_function('pkg.install', ['yum-plugin-versionlock'])
-            ret = self.run_function(func, [pkg])
+            if os_major_release == '5':
+                self.skipTest('`yum versionlock` does not seem to work on RHEL/CentOS 5')
+
+        if available:
+            if os_family == 'RedHat':
+                lock_pkg = 'yum-versionlock' if os_major_release == '5' else 'yum-plugin-versionlock'
+                versionlock = self.run_function('pkg.version', [lock_pkg])
+                if not versionlock:
+                    self.run_function('pkg.install', [lock_pkg])
+
+            hold_ret = self.run_function('pkg.hold', [pkg])
+            self.assertIn(pkg, hold_ret)
+            self.assertTrue(hold_ret[pkg]['result'])
+
+            unhold_ret = self.run_function('pkg.unhold', [pkg])
+            self.assertIn(pkg, unhold_ret)
+            self.assertTrue(hold_ret[pkg]['result'])
+
+            if os_family == 'RedHat':
+                if not versionlock:
+                    self.run_function('pkg.remove', [lock_pkg])
+
         else:
             os_grain = self.run_function('grains.item', ['os'])['os']
-            self.skipTest('{0} is unavailable on {1}'.format(func, os_grain))
+            self.skipTest('{0} is unavailable on {1}'.format('pkg.hold', os_grain))
 
     @requires_network()
     @destructiveTest
@@ -133,6 +165,8 @@ class PkgModuleTest(integration.ModuleCase,
         elif os_family == 'Debian':
             ret = self.run_function(func)
             self.assertNotEqual(ret, {})
+            if not isinstance(ret, dict):
+                self.skipTest('Upstream repo did not return coherent results. Skipping test.')
             for source, state in ret.items():
                 self.assertIn(state, (True, False, None))
         else:

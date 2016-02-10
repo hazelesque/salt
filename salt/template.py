@@ -13,6 +13,7 @@ import logging
 
 # Import salt libs
 import salt.utils
+from salt.utils.odict import OrderedDict
 from salt._compat import string_io
 from salt.ext.six import string_types
 
@@ -78,16 +79,27 @@ def compile_template(template,
 
     input_data = string_io(input_data)
     for render, argline in render_pipe:
-        try:
-            input_data.seek(0)
-        except Exception as exp:
-            log.error('error: {0}'.format(exp))
+        # For GPG renderer, input_data can be an OrderedDict (from YAML) or dict (from py renderer).
+        # Repress the error.
+        if not isinstance(input_data, (dict, OrderedDict)):
+            try:
+                input_data.seek(0)
+            except Exception as exp:
+                log.error('error: {0}'.format(exp))
 
         render_kwargs = dict(renderers=renderers, tmplpath=template)
         render_kwargs.update(kwargs)
         if argline:
             render_kwargs['argline'] = argline
+        start = time.time()
         ret = render(input_data, saltenv, sls, **render_kwargs)
+        log.profile(
+            'Time (in seconds) to render \'{0}\' using \'{1}\' renderer: {2}'.format(
+                template,
+                render.__module__.split('.')[-1],
+                time.time() - start
+            )
+        )
         if ret is None:
             # The file is empty or is being written elsewhere
             time.sleep(0.01)

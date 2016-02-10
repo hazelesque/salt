@@ -3,6 +3,10 @@
 Manage and query NPM packages.
 '''
 from __future__ import absolute_import
+try:
+    from shlex import quote as _cmd_quote  # pylint: disable=E0611
+except ImportError:
+    from pipes import quote as _cmd_quote
 
 # Import python libs
 import json
@@ -11,6 +15,7 @@ import distutils.version  # pylint: disable=import-error,no-name-in-module
 
 # Import salt libs
 import salt.utils
+import salt.modules.cmdmod
 from salt.exceptions import CommandExecutionError
 
 
@@ -28,7 +33,7 @@ def __virtual__():
     '''
     try:
         if salt.utils.which('npm') is not None:
-            _check_valid_version(__salt__)
+            _check_valid_version()
             return True
         else:
             return (False, 'npm execution module could not be loaded '
@@ -37,14 +42,14 @@ def __virtual__():
         return (False, str(exc))
 
 
-def _check_valid_version(salt):
+def _check_valid_version():
     '''
     Check the version of npm to ensure this module will work. Currently
     npm must be at least version 1.2.
     '''
     # pylint: disable=no-member
     npm_version = distutils.version.LooseVersion(
-        salt['cmd.run']('npm --version'))
+        salt.modules.cmdmod.run('npm --version', python_shell=True))
     valid_version = distutils.version.LooseVersion('1.2')
     # pylint: enable=no-member
     if npm_version < valid_version:
@@ -60,7 +65,9 @@ def install(pkg=None,
             dir=None,
             runas=None,
             registry=None,
-            env=None):
+            env=None,
+            dry_run=False,
+            silent=True):
     '''
     Install an NPM package.
 
@@ -96,6 +103,21 @@ def install(pkg=None,
 
         .. versionadded:: 2014.7.0
 
+    silent
+        Whether or not to run NPM install with --silent flag.
+
+        .. versionadded:: Boron
+
+    dry_run
+        Whether or not to run NPM install with --dry-run flag.
+
+        .. versionadded:: 2015.8.4
+
+    silent
+        Wether or not to run NPM install with --silent flag.
+
+        .. versionadded:: 2015.8.5
+
     CLI Example:
 
     .. code-block:: bash
@@ -105,21 +127,46 @@ def install(pkg=None,
         salt '*' npm.install coffee-script@1.0.1
 
     '''
+    # Protect against injection
+    if pkg:
+        pkg = _cmd_quote(pkg)
+    if pkgs:
+        pkg_list = []
+        for item in pkgs:
+            pkg_list.append(_cmd_quote(item))
+        pkgs = pkg_list
+    if registry:
+        registry = _cmd_quote(registry)
 
-    cmd = 'npm install --silent --json'
+    cmd = ['npm', 'install']
+    if silent:
+        cmd.append('--silent')
+    cmd.append('--json')
 
     if dir is None:
-        cmd += ' --global'
+        cmd.append(' --global')
 
     if registry:
-        cmd += ' --registry="{0}"'.format(registry)
+        cmd.append(' --registry="{0}"'.format(registry))
+
+    if dry_run:
+        cmd.append('--dry-run')
 
     if pkg:
-        cmd += ' "{0}"'.format(pkg)
+        cmd.append(pkg)
     elif pkgs:
-        cmd += ' "{0}"'.format('" "'.join(pkgs))
+        cmd.extend(pkgs)
 
-    result = __salt__['cmd.run_all'](cmd, python_shell=False, cwd=dir, runas=runas, env=env)
+    if env is None:
+        env = {}
+
+    if runas:
+        uid = salt.utils.get_uid(runas)
+        if uid:
+            env.update({'SUDO_UID': b'{0}'.format(uid), 'SUDO_USER': b''})
+
+    cmd = ' '.join(cmd)
+    result = __salt__['cmd.run_all'](cmd, python_shell=True, cwd=dir, runas=runas, env=env)
 
     if result['retcode'] != 0:
         raise CommandExecutionError(result['stderr'])
@@ -151,7 +198,8 @@ def install(pkg=None,
 
 def uninstall(pkg,
               dir=None,
-              runas=None):
+              runas=None,
+              env=None):
     '''
     Uninstall an NPM package.
 
@@ -167,6 +215,13 @@ def uninstall(pkg,
     runas
         The user to run NPM with
 
+    env
+        Environment variables to set when invoking npm. Uses the same ``env``
+        format as the :py:func:`cmd.run <salt.modules.cmdmod.run>` execution
+        function.
+
+        .. versionadded:: 2015.5.3
+
     CLI Example:
 
     .. code-block:: bash
@@ -174,6 +229,17 @@ def uninstall(pkg,
         salt '*' npm.uninstall coffee-script
 
     '''
+    # Protect against injection
+    if pkg:
+        pkg = _cmd_quote(pkg)
+
+    if env is None:
+        env = {}
+
+    if runas:
+        uid = salt.utils.get_uid(runas)
+        if uid:
+            env.update({'SUDO_UID': b'{0}'.format(uid), 'SUDO_USER': b''})
 
     cmd = 'npm uninstall'
 
@@ -182,7 +248,7 @@ def uninstall(pkg,
 
     cmd += ' "{0}"'.format(pkg)
 
-    result = __salt__['cmd.run_all'](cmd, python_shell=False, cwd=dir, runas=runas)
+    result = __salt__['cmd.run_all'](cmd, python_shell=True, cwd=dir, runas=runas, env=env)
 
     if result['retcode'] != 0:
         log.error(result['stderr'])
@@ -226,6 +292,17 @@ def list_(pkg=None,
         salt '*' npm.list
 
     '''
+    # Protect against injection
+    if pkg:
+        pkg = _cmd_quote(pkg)
+
+    if env is None:
+        env = {}
+
+    if runas:
+        uid = salt.utils.get_uid(runas)
+        if uid:
+            env.update({'SUDO_UID': b'{0}'.format(uid), 'SUDO_USER': b''})
 
     cmd = 'npm list --silent --json'
 
@@ -240,7 +317,7 @@ def list_(pkg=None,
             cwd=dir,
             runas=runas,
             env=env,
-            python_shell=False,
+            python_shell=True,
             ignore_retcode=True)
 
     # npm will return error code 1 for both no packages found and an actual

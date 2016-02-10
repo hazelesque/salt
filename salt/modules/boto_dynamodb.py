@@ -63,6 +63,7 @@ try:
     from boto.dynamodb2.fields import HashKey, RangeKey
     from boto.dynamodb2.fields import AllIndex, GlobalAllIndex
     from boto.dynamodb2.table import Table
+    from boto.exception import JSONResponseError
     HAS_BOTO = True
 except ImportError:
     HAS_BOTO = False
@@ -73,8 +74,8 @@ def __virtual__():
     Only load if boto libraries exist.
     '''
     if not HAS_BOTO:
-        return False
-    __utils__['boto.assign_funcs'](__name__, 'dynamodb')
+        return (False, 'The module boto_dynamodb could not be loaded: boto libraries not found')
+    __utils__['boto.assign_funcs'](__name__, 'dynamodb2')
     return True
 
 
@@ -120,10 +121,6 @@ def create_table(table_name, region=None, key=None, keyid=None, profile=None,
     }
     local_table_indexes = []
     if local_indexes:
-        # Add the table's key
-        local_table_indexes.append(
-            AllIndex(primary_index_name, parts=primary_index_fields)
-        )
         for index in local_indexes:
             local_table_indexes.append(_extract_index(index))
     global_table_indexes = []
@@ -171,10 +168,15 @@ def exists(table_name, region=None, key=None, keyid=None, profile=None):
 
         salt myminion boto_dynamodb.exists table_name region=us-east-1
     '''
-    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+    try:
+        conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+        conn.describe_table(table_name)
+    except JSONResponseError as e:
+        if e.error_code == 'ResourceNotFoundException':
+            return False
+        raise
 
-    tables = conn.list_tables()
-    return bool(tables and table_name in tables['TableNames'])
+    return True
 
 
 def delete(table_name, region=None, key=None, keyid=None, profile=None):
@@ -201,6 +203,33 @@ def delete(table_name, region=None, key=None, keyid=None, profile=None):
         else:
             time.sleep(1)   # sleep for one second and try again
     return False
+
+
+def update(table_name, throughput=None, global_indexes=None,
+           region=None, key=None, keyid=None, profile=None):
+    '''
+    Update a DynamoDB table.
+
+    CLI example::
+
+        salt myminion boto_dynamodb.update table_name region=us-east-1
+    '''
+    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+    table = Table(table_name, connection=conn)
+    return table.update(throughput=throughput, global_indexes=global_indexes)
+
+
+def describe(table_name, region=None, key=None, keyid=None, profile=None):
+    '''
+    Describe a DynamoDB table.
+
+    CLI example::
+
+        salt myminion boto_dynamodb.describe table_name region=us-east-1
+    '''
+    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+    table = Table(table_name, connection=conn)
+    return table.describe()
 
 
 def _extract_index(index_data, global_index=False):

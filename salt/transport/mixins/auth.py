@@ -38,6 +38,7 @@ class AESPubClientMixin(object):
     @tornado.gen.coroutine
     def _decode_payload(self, payload):
         # we need to decrypt it
+        log.trace('Decoding payload: {0}'.format(payload))
         if payload['enc'] == 'aes':
             self._verify_master_signature(payload)
             try:
@@ -59,10 +60,15 @@ class AESReqServerMixin(object):
         '''
         Pre-fork we need to create the zmq router device
         '''
-        salt.master.SMaster.secrets['aes'] = {'secret': multiprocessing.Array(ctypes.c_char,
-                                                            salt.crypt.Crypticle.generate_key_string()),
-                                              'reload': salt.crypt.Crypticle.generate_key_string,
-                                              }
+        if 'aes' not in salt.master.SMaster.secrets:
+            # TODO: This is still needed only for the unit tests
+            # 'tcp_test.py' and 'zeromq_test.py'. Fix that. In normal
+            # cases, 'aes' is already set in the secrets.
+            salt.master.SMaster.secrets['aes'] = {
+                'secret': multiprocessing.Array(ctypes.c_char,
+                              salt.crypt.Crypticle.generate_key_string()),
+                'reload': salt.crypt.Crypticle.generate_key_string
+            }
 
     def post_fork(self, _, __):
         self.serial = salt.payload.Serial(self.opts)
@@ -70,7 +76,7 @@ class AESReqServerMixin(object):
 
         # other things needed for _auth
         # Create the event manager
-        self.event = salt.utils.event.get_master_event(self.opts, self.opts['sock_dir'])
+        self.event = salt.utils.event.get_master_event(self.opts, self.opts['sock_dir'], listen=False)
         self.auto_key = salt.daemons.masterapi.AutoKey(self.opts)
 
         # only create a con_cache-client if the con_cache is active
@@ -217,7 +223,7 @@ class AESReqServerMixin(object):
 
         elif os.path.isfile(pubfn):
             # The key has been accepted, check it
-            if salt.utils.fopen(pubfn, 'r').read() != load['pub']:
+            if salt.utils.fopen(pubfn, 'r').read().strip() != load['pub'].strip():
                 log.error(
                     'Authentication attempt from {id} failed, the public '
                     'keys did not match. This may be an attempt to compromise '

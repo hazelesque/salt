@@ -27,6 +27,7 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
+HAS_MSGPACK = False
 try:
     # Attempt to import msgpack
     import msgpack
@@ -34,10 +35,12 @@ try:
     # for some msgpack bindings, check for it
     if msgpack.loads(msgpack.dumps([1, 2, 3]), use_list=True) is None:
         raise ImportError
+    HAS_MSGPACK = True
 except ImportError:
     # Fall back to msgpack_pure
     try:
         import msgpack_pure as msgpack  # pylint: disable=import-error
+        HAS_MSGPACK = True
     except ImportError:
         # TODO: Come up with a sane way to get a configured logfile
         #       and write to the logfile when this error is hit also
@@ -47,6 +50,21 @@ except ImportError:
         # Don't exit if msgpack is not available, this is to make local mode
         # work without msgpack
         #sys.exit(salt.defaults.exitcodes.EX_GENERIC)
+
+
+if HAS_MSGPACK and not hasattr(msgpack, 'exceptions'):
+    class PackValueError(Exception):
+        '''
+        older versions of msgpack do not have PackValueError
+        '''
+
+    class exceptions(object):
+        '''
+        older versions of msgpack do not have an exceptions module
+        '''
+        PackValueError = PackValueError()
+
+    msgpack.exceptions = exceptions()
 
 
 def package(payload):
@@ -120,7 +138,7 @@ class Serial(object):
         '''
         try:
             return msgpack.dumps(msg)
-        except OverflowError:
+        except (OverflowError, msgpack.exceptions.PackValueError):
             # msgpack can't handle the very long Python longs for jids
             # Convert any very long longs to strings
             # We borrow the technique used by TypeError below
@@ -193,7 +211,7 @@ class Serial(object):
                     return obj
                 return obj
             return msgpack.dumps(odict_encoder(msg))
-        except SystemError as exc:
+        except (SystemError, TypeError) as exc:
             log.critical('Unable to serialize message! Consider upgrading msgpack. '
                          'Message which failed was {failed_message} '
                          'with exception {exception_message}').format(msg, exc)

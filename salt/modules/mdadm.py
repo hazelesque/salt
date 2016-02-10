@@ -31,9 +31,9 @@ def __virtual__():
     mdadm provides raid functions for Linux
     '''
     if __grains__['kernel'] != 'Linux':
-        return False
+        return (False, 'The mdadm execution module cannot be loaded: only available on Linux.')
     if not salt.utils.which('mdadm'):
-        return False
+        return (False, 'The mdadm execution module cannot be loaded: the mdadm binary is not in the path.')
     return __virtualname__
 
 
@@ -271,7 +271,7 @@ def save_config():
         salt '*' raid.save_config
 
     '''
-    scan = __salt__['cmd.run']('mdadm --detail --scan', python_shell=False).split()
+    scan = __salt__['cmd.run']('mdadm --detail --scan', python_shell=False).splitlines()
     # Issue with mdadm and ubuntu
     # REF: http://askubuntu.com/questions/209702/why-is-my-raid-dev-md1-showing-up-as-dev-md126-is-mdadm-conf-being-ignored
     if __grains__['os'] == 'Ubuntu':
@@ -344,7 +344,7 @@ def assemble(name,
     if isinstance(devices, str):
         devices = devices.split(',')
 
-    cmd = ['mdadm', '-A', name, '-v', opts] + devices
+    cmd = ['mdadm', '-A', name, '-v'] + opts + devices
 
     if test_mode is True:
         return cmd
